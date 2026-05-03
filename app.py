@@ -1451,8 +1451,8 @@ def main() -> None:
     header_cols = st.columns([2, 1, 1])
     header_cols[0].markdown(f"Prepared by: Byeonghun Kim")
     header_cols[1].markdown(f"**Uploaded file:** `{html.escape(source_name)}`")
-    header_cols[2].markdown(f"**Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    # header_cols[3].markdown(f"**Total sites:** {len(filtered_df)}")
+    # header_cols[2].markdown(f"**Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    header_cols[2].markdown(f"**Total sites:** {len(filtered_df)}")
     render_kpi_cards(kpis)
 
     st.divider()
