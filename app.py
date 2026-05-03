@@ -1141,8 +1141,9 @@ def render_task_selector(task_columns: list[str]) -> list[str]:
             for task in task_columns:
                 st.session_state[f"task_checkbox__{task}"] = True
 
-    for task in task_columns:
-        st.checkbox(task, key=f"task_checkbox__{task}")
+    with st.sidebar.container():
+        for task in task_columns:
+            st.checkbox(task, key=f"task_checkbox__{task}")
 
     selected = get_selected_task_columns(task_columns)
     st.sidebar.caption(f"Selected: {len(selected)} / {len(task_columns)}")
