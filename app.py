@@ -85,9 +85,9 @@ STRING_STATUS_PALETTE = [
 ]
 
 SAMPLE_CSV = """location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,나비볼밸브,솔밸브 오링,워터펌프 누수점검,Chiller F/W Version,HVAC F/W Version
-FL001,BLACKWATER RIVER,US,FL,Milton,30.64915185,-86.94593818,America/Chicago,Y,60/66,N/A,10/66,3.0.0.0,3.0.0.1
-FL002,CANOE,US,FL,Holt,30.68096031,-86.79231311,America/Chicago,Y,20/183,183/183,183/183,3.0.0.2,3.0.0.6
-FL003,SAMPLE DISABLED,US,TX,Dallas,32.7767,-96.7970,America/Chicago,N,5/10,NA,,Pending,Completed
+FL001,BLACKWATER RIVER,US,FL,Milton,30.6,-86.9,America/Chicago,Y,60/66,N/A,10/66,3.0.0.0,3.0.0.1
+FL002,CANOE,US,FL,Holt,30.6,-86.7,America/Chicago,Y,20/183,183/183,183/183,3.0.0.2,3.0.0.6
+FL003,SAMPLE DISABLED,US,TX,Dallas,32.7,-96.7,America/Chicago,N,5/10,NA,,Pending,Completed
 """
 
 
