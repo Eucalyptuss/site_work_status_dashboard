@@ -569,6 +569,16 @@ def _get_site_display_name(row: pd.Series) -> str:
     return location_id or "Unnamed site"
 
 
+def is_kpi_calculation_task(task_name: str) -> bool:
+    """Return whether a selected work item should affect Complete/Incomplete KPI counts.
+
+    The dashboard can still display operational note columns, but a column named
+    `note` is descriptive text and must not make a site complete or incomplete.
+    Matching is case-insensitive and ignores leading/trailing spaces.
+    """
+    return str(task_name).strip().lower() != "note"
+
+
 def calculate_kpis(
     df: pd.DataFrame,
     filtered_df: pd.DataFrame,
@@ -579,42 +589,36 @@ def calculate_kpis(
 
     Display rules in this UI version:
     - Total Sites means currently displayed / filtered sites.
-    - Raw total, enabled total, and data-quality issue count are intentionally
-      excluded from the KPI board.
-    - Critical status is shown to operators as Urgent Sites.
+    - Urgent Sites and Warning Sites are not shown on the KPI board.
+    - Complete Sites and Incomplete Sites include all matching site names.
+    - A selected task column named `note` is excluded from Complete/Incomplete counts.
     """
     displayed_sites = len(filtered_df)
-    complete_sites = 0
-    incomplete_sites = 0
-    urgent_site_names: list[str] = []
-    warning_site_names: list[str] = []
+    complete_site_names: list[str] = []
+    incomplete_site_names: list[str] = []
+
+    # Exclude descriptive note columns from Complete/Incomplete KPI logic only.
+    # They remain visible in the task selector, map popup, detail panel, and table.
+    kpi_task_columns = [task for task in selected_task_columns if is_kpi_calculation_task(task)]
 
     for _, row in filtered_df.iterrows():
-        summary = calculate_site_summary_for_selected_tasks(row, selected_task_columns)
-        parsed = summary["parsed"]
+        parsed = parse_all_task_statuses(row, kpi_task_columns)
         progress_items = [p for p in parsed.values() if p["type"] == "progress"]
-        has_dash_placeholder = any(str(row.get(task, "")).strip() in DASH_PLACEHOLDERS for task in selected_task_columns)
+        has_dash_placeholder = any(str(row.get(task, "")).strip() in DASH_PLACEHOLDERS for task in kpi_task_columns)
         has_invalid_progress = any(p["type"] == "invalid_progress" for p in parsed.values())
         has_numeric_below_100 = any((p["percent"] or 0) < 100 for p in progress_items)
         has_all_numeric_100 = bool(progress_items) and all((p["percent"] or 0) >= 100 for p in progress_items)
 
+        site_name = _get_site_display_name(row)
         if has_all_numeric_100 and not has_dash_placeholder and not has_invalid_progress:
-            complete_sites += 1
+            complete_site_names.append(site_name)
         if has_numeric_below_100 or has_dash_placeholder or has_invalid_progress:
-            incomplete_sites += 1
-
-        status_level = summary["status_level"]
-        if status_level == "Critical":
-            urgent_site_names.append(_get_site_display_name(row))
-        elif status_level == "Warning":
-            warning_site_names.append(_get_site_display_name(row))
+            incomplete_site_names.append(site_name)
 
     return {
         "Total Sites": {"count": displayed_sites},
-        "Complete Sites": {"count": complete_sites},
-        "Incomplete Sites": {"count": incomplete_sites},
-        "Urgent Sites": {"count": len(urgent_site_names), "sites": urgent_site_names},
-        "Warning Sites": {"count": len(warning_site_names), "sites": warning_site_names},
+        "Complete Sites": {"count": len(complete_site_names), "sites": complete_site_names},
+        "Incomplete Sites": {"count": len(incomplete_site_names), "sites": incomplete_site_names},
     }
 
 
@@ -976,21 +980,20 @@ def render_floating_task_selector_css() -> None:
             padding: 0.9rem 1rem;
             margin-bottom: 0.75rem;
             box-shadow: 0 1px 5px rgba(0,0,0,0.12);
-            min-height: 6.2rem;
+            height: 13.2rem;
+            min-height: 13.2rem;
+            max-height: 13.2rem;
             display: flex;
             flex-direction: column;
             gap: 0.55rem;
-        }
-        .kpi-card-sites {
-            height: 9.4rem;
-            min-height: 9.4rem;
-            max-height: 9.4rem;
+            overflow: hidden;
         }
         .kpi-card-main {
             display: flex;
             align-items: baseline;
             justify-content: space-between;
             gap: 0.8rem;
+            flex: 0 0 auto;
         }
         .kpi-card-title {
             color: #111827;
@@ -1009,29 +1012,26 @@ def render_floating_task_selector_css() -> None:
         .kpi-site-list {
             display: flex;
             flex-wrap: wrap;
-            align-items: center;
+            align-content: flex-start;
+            align-items: flex-start;
             gap: 0.35rem;
-            max-height: 4.6rem;
             overflow-y: auto;
-            padding-top: 0.1rem;
+            padding: 0.1rem 0.15rem 0.15rem 0;
+            flex: 1 1 auto;
         }
         .kpi-site-pill {
             display: inline-block;
-            max-width: 12rem;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            max-width: 100%;
+            white-space: normal;
+            word-break: break-word;
             background: #f3f4f6;
             border: 1px solid #d1d5db;
             border-radius: 999px;
             color: #111827;
-            font-size: 0.78rem;
+            font-size: 0.74rem;
             font-weight: 700;
-            padding: 0.16rem 0.5rem;
-            line-height: 1.25;
-        }
-        .kpi-site-pill-more {
-            background: #e5e7eb;
+            padding: 0.14rem 0.45rem;
+            line-height: 1.22;
         }
         .kpi-empty-sites {
             color: #6b7280;
@@ -1141,7 +1141,7 @@ def render_task_selector(task_columns: list[str]) -> list[str]:
             for task in task_columns:
                 st.session_state[f"task_checkbox__{task}"] = True
 
-    with st.sidebar.container():
+    with st.sidebar.container(height=260):
         for task in task_columns:
             st.checkbox(task, key=f"task_checkbox__{task}")
 
@@ -1231,20 +1231,15 @@ def _kpi_card_html(title: str, count: Any, site_names: list[str] | None = None) 
     safe_count = html.escape(str(count))
     site_list_html = ""
     if site_names is not None:
-        visible_names = [str(name) for name in site_names[:10]]
-        overflow = max(len(site_names) - len(visible_names), 0)
-        if visible_names:
+        if site_names:
             pills = "".join(
-                f"<span class='kpi-site-pill'>{html.escape(name)}</span>" for name in visible_names
+                f"<span class='kpi-site-pill'>{html.escape(str(name))}</span>" for name in site_names
             )
-            if overflow:
-                pills += f"<span class='kpi-site-pill kpi-site-pill-more'>+{overflow} more</span>"
             site_list_html = f"<div class='kpi-site-list'>{pills}</div>"
         else:
             site_list_html = "<div class='kpi-site-list kpi-empty-sites'>No sites</div>"
-    card_class = "kpi-card kpi-card-sites" if site_names is not None else "kpi-card"
     return f"""
-    <div class='{card_class}'>
+    <div class='kpi-card'>
         <div class='kpi-card-main'>
             <div class='kpi-card-title'>{safe_title}</div>
             <div class='kpi-card-value'>{safe_count}</div>
@@ -1269,17 +1264,16 @@ def _kpi_sites(kpis: dict[str, Any], label: str) -> list[str]:
 
 
 def render_kpi_cards(kpis: dict[str, Any]) -> None:
-    row1 = st.columns(3)
-    row1_items = ["Total Sites", "Complete Sites", "Incomplete Sites"]
-    for col, label in zip(row1, row1_items):
-        col.markdown(_kpi_card_html(label, _kpi_count(kpis, label)), unsafe_allow_html=True)
-
-    row2 = st.columns(2)
-    for col, label in zip(row2, ["Urgent Sites", "Warning Sites"]):
-        col.markdown(
-            _kpi_card_html(label, _kpi_count(kpis, label), _kpi_sites(kpis, label)),
-            unsafe_allow_html=True,
-        )
+    row = st.columns(3)
+    row[0].markdown(_kpi_card_html("Total Sites", _kpi_count(kpis, "Total Sites")), unsafe_allow_html=True)
+    row[1].markdown(
+        _kpi_card_html("Complete Sites", _kpi_count(kpis, "Complete Sites"), _kpi_sites(kpis, "Complete Sites")),
+        unsafe_allow_html=True,
+    )
+    row[2].markdown(
+        _kpi_card_html("Incomplete Sites", _kpi_count(kpis, "Incomplete Sites"), _kpi_sites(kpis, "Incomplete Sites")),
+        unsafe_allow_html=True,
+    )
 
 
 def _render_task_detail_row(task: str, parsed: dict[str, Any]) -> None:
