@@ -1141,7 +1141,7 @@ def render_task_selector(task_columns: list[str]) -> list[str]:
             for task in task_columns:
                 st.session_state[f"task_checkbox__{task}"] = True
 
-    with st.sidebar.container(height=260):
+    with st.sidebar.container():
         for task in task_columns:
             st.checkbox(task, key=f"task_checkbox__{task}")
 
