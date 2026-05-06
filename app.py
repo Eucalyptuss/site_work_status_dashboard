@@ -603,13 +603,50 @@ def calculate_kpis(
 
     for _, row in filtered_df.iterrows():
         parsed = parse_all_task_statuses(row, kpi_task_columns)
-        progress_items = [p for p in parsed.values() if p["type"] == "progress"]
-        has_dash_placeholder = any(str(row.get(task, "")).strip() in DASH_PLACEHOLDERS for task in kpi_task_columns)
-        has_invalid_progress = any(p["type"] == "invalid_progress" for p in parsed.values())
+
+        site_name = _get_site_display_name(row)
+
+        # KPI logic should be driven by progress-style work items only.
+        # String-only operational columns such as firmware version, status memo,
+        # or other descriptive values must not block a site from being counted
+        # as Complete when all selected progress-style work items are N/A.
+        #
+        # Because task columns are dynamic and there is no explicit schema flag
+        # saying "this is a progress column", the per-row parsed type is used:
+        # - progress / invalid_progress / missing / not_applicable are KPI-scope
+        # - string_status is display-only for Complete/Incomplete KPI counting
+        kpi_scope_parsed = {
+            task: status
+            for task, status in parsed.items()
+            if status["type"] != "string_status"
+        }
+
+        # If every KPI-scope item is N/A for this site, there is no applicable
+        # unfinished progress work. Count the site as Complete even when other
+        # selected columns contain string values such as F/W versions.
+        all_kpi_scope_items_are_not_applicable = bool(kpi_scope_parsed) and all(
+            status["type"] == "not_applicable" for status in kpi_scope_parsed.values()
+        )
+        if all_kpi_scope_items_are_not_applicable:
+            complete_site_names.append(site_name)
+            continue
+
+        # N/A means the work item does not apply to this specific site, so it is
+        # excluded from the denominator after the all-N/A case above is handled.
+        applicable_parsed = {
+            task: status
+            for task, status in kpi_scope_parsed.items()
+            if status["type"] != "not_applicable"
+        }
+
+        progress_items = [p for p in applicable_parsed.values() if p["type"] == "progress"]
+        applicable_tasks = list(applicable_parsed.keys())
+        has_dash_placeholder = any(str(row.get(task, "")).strip() in DASH_PLACEHOLDERS for task in applicable_tasks)
+        has_invalid_progress = any(p["type"] == "invalid_progress" for p in applicable_parsed.values())
         has_numeric_below_100 = any((p["percent"] or 0) < 100 for p in progress_items)
         has_all_numeric_100 = bool(progress_items) and all((p["percent"] or 0) >= 100 for p in progress_items)
 
-        site_name = _get_site_display_name(row)
+        #site_name = _get_site_display_name(row)
         if has_all_numeric_100 and not has_dash_placeholder and not has_invalid_progress:
             complete_site_names.append(site_name)
         if has_numeric_below_100 or has_dash_placeholder or has_invalid_progress:
