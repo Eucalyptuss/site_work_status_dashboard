@@ -1,9 +1,9 @@
 ﻿location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,나비볼밸브,배선분리,솔밸브 오링,워터펌프 누수점검,Chiller#1 F/W Version,Chiller#2 F/W Version,HVAC F/W Version,CC Start,HC Start,Version,Note
-FL001,KAYAK,US,FL,Holt,30.6979877,-86.70955599,America/Chicago,Y,0/0,0/0,0/0,-,1.1.01_(15/66),1.1.01_(15/66),1.1.01_(15/66),Commercial operation,Commercial operation,1.0 (66),-
-FL002,CHIPOLA RIVER,US,FL,Altha,30.44839151,-85.2846281,America/Chicago,Y,0/0,0/0,0/0,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (66),-
-FL003,FOURMILE,US,FL,Altha,30.44839153,-85.2846281,America/Chicago,Y,0/0,0/0,0/0,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (66),-
-FL004,SHIRER BRANCH,US,FL,Clarksville,30.42545245,-85.23273999,America/Chicago,Y,0/0,0/0,0/0,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (66),-
-FL005,TEN MILE,US,FL,Altha,30.50425368,-85.16696285,America/Chicago,Y,0/0,0/0,0/0,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (66),-
+FL001,KAYAK,US,FL,Holt,30.6979877,-86.70955599,America/Chicago,Y,-,-,N/A,-,1.1.01_(15/66),1.1.01_(15/66),1.1.01_(15/66),Commercial operation,Commercial operation,1.0 (66),-
+FL002,CHIPOLA RIVER,US,FL,Altha,30.44839151,-85.2846281,America/Chicago,Y,-,-,N/A,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (66),-
+FL003,FOURMILE,US,FL,Altha,30.44839153,-85.2846281,America/Chicago,Y,-,-,N/A,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (66),-
+FL004,SHIRER BRANCH,US,FL,Clarksville,30.42545245,-85.23273999,America/Chicago,Y,-,-,N/A,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (66),-
+FL005,TEN MILE,US,FL,Altha,30.50425368,-85.16696285,America/Chicago,Y,-,-,N/A,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (66),-
 FL006,BLACKWATER RIVER,US,FL,Milton,30.64915185,-86.94593818,America/Chicago,Y,-,-,-,-,3.0.05_2026/03/04,3.0.05_2026/03/04,3.0.02_2024/12/12,2026-05-04,Commercial operation,1.5 (54),-
 FL007,CANOE,US,FL,Holt,30.68096031,-86.79231311,America/Chicago,Y,-,-,-,-,3.0.05_2026/03/04,3.0.05_2026/03/04,3.0.02_2024/12/12,2026-05-04,Commercial operation,1.5 (54),-
 FL008,LANSING SMITH,US,FL,Southport,30.27003327,-85.70043631,America/Chicago,Y,-,-,-,-,-,-,-,2026-06-12,2026-07-31,1.5 (360),-
@@ -11,7 +11,7 @@ FL009,BIG BROOK,US,FL,Clarksville,30.49134488,-85.2828953,America/Chicago,Y,66/6
 FL010,SAND PINE,US,FL,Altha,30.44379786,-85.26154953,America/Chicago,Y,66/66,120/120,39/39,39/39,3.0.06_2026/03/04,3.0.06_2026/03/04,3.0.02_2024/12/12,2026-04-21,2026-04-27,1.5 (81),-
 FL011,NORTON CREEK,US,FL,Madison,30.38471435,-83.34842953,America/New_York,Y,66/66,66/66,8/8,66/66,3.0.06_2026/03/04,3.0.06_2026/03/04,3.0.02_2024/12/12,2026-04-27,2026-06-01,1.5 (81),-
 FL012,NATURE TRAIL,US,FL,Glen St. Mary,30.32791496,-82.1837223,America/New_York,Y,-,-,6/6,66/66,-,-,-,2026-05-13,2026-05-21,1.5 (81),-
-FL013,CEDAR TRAIL,US,FL,Glen St. Mary,30.32791498,-82.1837223,America/New_York,Y,-,-,0/0,66/66,-,-,-,2026-05-13,2026-05-22,1.5 (81),-
+FL013,CEDAR TRAIL,US,FL,Glen St. Mary,30.32791498,-82.1837223,America/New_York,Y,-,-,N/A,66/66,-,-,-,2026-05-13,2026-05-22,1.5 (81),-
 FL014,TOMAS CREEK,US,FL,Callahan,30.50937898,-81.89114477,America/New_York,Y,-,-,-,-,-,-,-,2026-05-13,2026-05-28,1.5 (81),-
 FL015,PUTNAM,US,FL,East Palatka,29.62935195,-81.58658351,America/New_York,Y,-,-,-,-,-,-,-,2026-07-13,2026-09-11,1.5 (171),-
 FL016,SEA GRAPE,US,FL,FT. Pierce,27.48833708,-80.55893306,America/New_York,Y,-,-,-,-,-,-,-,2026-09-15,2026-09-21,1.5 (81),-
@@ -24,10 +24,10 @@ AZ001,WILMOT 2,US,AZ,Tucson,31.98738929,-110.8394235,America/Phoenix,Y,36/36,-,5
 NV001,DRY LAKE EAST,US,NV,Las Vegas,36.38059974,-114.8749043,America/Los_Angeles,Y,-,-,-,-,-,-,-,2026-07-13,2026-08-06,1.0 (264),-
 UT001,DOMINGUEZ,US,UT,Salt Lake City,40.76562241,-112.0054081,America/Denver,Y,-,-,1,85/127,3.0.05_3.0.06,3.0.05_3.0.06,3.0.02_2024/12/12,Commercial operation,Commercial operation,1.5 (183),-
 MI001,CENTURY OAKS,US,MI,Bad Axe,43.8109131,-83.10178928,America/Detroit,Y,-,-,186/186,186/186,3.0.05_3.0.06,3.0.05_3.0.06,-,2026-01-05,2026-02-24,1.5 (183),-
-TX001,CROWNED HERON 1,US,TX,Richmond,29.48535501,-95.62241117,America/Chicago,Y,-,-,0/0,-,1.1.01,1.1.01,1.1.01,2025-04-14,2026-01-20,1.0 (92),-
-TX002,CROWNED HERON 2,US,TX,Richmond,29.48535503,-95.62241117,America/Chicago,Y,-,-,0/0,-,1.1.01,1.1.01,1.1.01,2025-11-11,2026-04-06,1.0 (92),-
-TX003,STONERIDGE,US,TX,Milam County,30.56553595,-97.11038816,America/Chicago,Y,-,-,0/0,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (61),-
-TX004,CARTWHEEL,US,TX,Sulphur Springs,33.08428743,-95.61474033,America/Chicago,Y,-,-,0/0,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (92),-
+TX001,CROWNED HERON 1,US,TX,Richmond,29.48535501,-95.62241117,America/Chicago,Y,-,-,N/A,-,1.1.01,1.1.01,1.1.01,2025-04-14,2026-01-20,1.0 (92),-
+TX002,CROWNED HERON 2,US,TX,Richmond,29.48535503,-95.62241117,America/Chicago,Y,-,-,N/A,-,1.1.01,1.1.01,1.1.01,2025-11-11,2026-04-06,1.0 (92),-
+TX003,STONERIDGE,US,TX,Milam County,30.56553595,-97.11038816,America/Chicago,Y,-,-,N/A,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (61),-
+TX004,CARTWHEEL,US,TX,Sulphur Springs,33.08428743,-95.61474033,America/Chicago,Y,-,-,N/A,-,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 (92),-
 CA001,BELLEFIELD 2(AES),US,CA,Mojave,35.02071494,-118.07641,America/Los_Angeles,N,-,-,-,-,-,-,-,-,-,E5S,-
 AZ002,WESTWING 2B(AES),US,AZ,Peoria,33.71365406,-112.3222723,America/Phoenix,N,-,-,-,-,-,-,-,-,-,E4L,-
 AZ003,MCFARLAND C(AES),US,AZ,Dateland,32.95043237,-113.4885612,America/Phoenix,N,-,-,-,-,-,-,-,-,-,E4L,-
