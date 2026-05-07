@@ -30,9 +30,9 @@ location_id,location_name,country,state,city,latitude,longitude,timezone,enabled
 예시:
 
 ```csv
-location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,나비볼밸브,솔밸브 오링,워터펌프 누수점검,Chiller F/W Version,HVAC F/W Version
-FL001,BLACKWATER RIVER,US,FL,Milton,30.64915185,-86.94593818,America/Chicago,Y,60/66,N/A,10/66,3.0.0.0,3.0.0.1
-FL002,CANOE,US,FL,Holt,30.68096031,-86.79231311,America/Chicago,Y,20/183,183/183,183/183,3.0.0.2,3.0.0.6
+location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,Valve1, Valve2,Pump ,F/W Version,S/W version
+FL001,BLACK RIVER,US,FL,Milton,30.6,-86.9,America/Chicago,Y,60/66,N/A,10/66,3.0.0.0,3.0.0.1
+FL002,CAN,US,FL,Holt,30.6,-86.7,America/Chicago,Y,20/183,183/183,183/183,3.0.0.2,3.0.0.6
 ```
 
 ## enabled 값 규칙
@@ -154,8 +154,8 @@ streamlit run app.py
 예:
 
 ```text
-BLACKWATER RIVER
-나비볼밸브: 60/66 · 90.9%
+BLACK RIVER
+Valve1: 60/66 · 90.9%
 ```
 
 ### 선택 작업이 2개 이상일 때
@@ -165,10 +165,10 @@ BLACKWATER RIVER
 예 popup:
 
 ```text
-BLACKWATER RIVER
-나비볼밸브: 60/66 · 90.9%
-솔밸브 오링: N/A
-워터펌프 누수점검: 10/66 · 15.2%
+BLACK RIVER
+Valve1 : 60/66 · 90.9%
+Valve2: N/A
+Pump: 10/66 · 15.2%
 ```
 
 ## Marker 색상 기준
@@ -206,21 +206,21 @@ Severity 기준:
 
 ## 테스트 시나리오
 
-1. `나비볼밸브`만 선택  
-   - `BLACKWATER RIVER`: `60/66 · 90.9%` 표시
-   - `CANOE`: `20/183 · 10.9%` 표시
-   - marker 색상은 `나비볼밸브` 완료율 기준
+1. `Valve1`만 선택  
+   - `BLACK RIVER`: `60/66 · 90.9%` 표시
+   - `CAN`: `20/183 · 10.9%` 표시
+   - marker 색상은 `Valve1` 완료율 기준
 
-2. `워터펌프 누수점검`만 선택  
-   - `BLACKWATER RIVER`: `10/66 · 15.2%` 표시
-   - `CANOE`: `183/183 · 100.0%` 표시
-   - marker 색상은 `워터펌프 누수점검` 완료율 기준
+2. `Water Pump`만 선택  
+   - `BLACK RIVER`: `10/66 · 15.2%` 표시
+   - `CAN`: `183/183 · 100.0%` 표시
+   - marker 색상은 `Water Pump` 완료율 기준
 
-3. `Chiller F/W Version`만 선택  
+3. `F/W Version`만 선택  
    - version 값이 label에 표시
    - progress가 아니므로 string status/info 기준 색상
 
-4. `나비볼밸브`와 `솔밸브 오링` 2개 선택  
+4. `Valve1`과 `Valve2` 2개 선택  
    - 지도 label에는 site name만 표시
    - popup/detail panel에 두 작업 상세 표시
    - marker 색상은 progress 작업 중 최저 완료율 기준
@@ -239,15 +239,6 @@ Severity 기준:
 
 8. Disabled site 포함 옵션  
    - `enabled=N` site는 기본 숨김
-   - 옵션을 켜면 지도와 테이블에 표시
-
-## 향후 task_details.csv 확장 방향
-
-현재 버전은 site status CSV만으로 동작합니다. 향후 아래 구조의 `task_details.csv`를 추가할 수 있도록 detail panel 확장 영역을 열어두었습니다.
-
-```csv
-location_id,task_name,owner,status,detail,issue,action_plan,due_date,updated_at,updated_by
-```
 
 추가 가능 정보:
 
@@ -264,7 +255,7 @@ location_id,task_name,owner,status,detail,issue,action_plan,due_date,updated_at,
 
 ## 향후 DB 전환
 
-현재는 CSV 기반입니다. 데이터 처리 함수와 UI 렌더링 함수를 분리했으므로 향후 SQLite 또는 PostgreSQL로 전환할 때 CSV loader만 repository/data access layer로 교체하는 방식이 적합합니다.
+현재는 CSV 기반입니다. 데이터 처리 함수와 UI 렌더링 함수를 분리했으므로 향후 SQLite 또는 PostgreSQL로 전환할 때 CSV loader만 repository/data access layer로 전환 업데이트 예정입니다.
 
 
 ## UI revision notes
@@ -289,9 +280,3 @@ Internal columns starting with `_` are excluded from task selection and site det
 When the app starts without an uploaded file, it loads `site_status.csv` from the project folder and shows it as the current uploaded file. If you upload another CSV from the sidebar, the uploaded file takes priority.
 
 The map automatically fits the initial viewport to all valid enabled sites in the active CSV.
-
-## v5 update notes
-
-- Single selected work-item badges on the map use white text inside the status-colored badge.
-- Complete Sites counts only sites where selected numeric/progress work items are all 100% and no dash placeholder (`-`) is present.
-- Incomplete Sites counts sites where any selected numeric/progress work item is below 100%, where an invalid progress value exists, or where a dash placeholder (`-`) is present.
