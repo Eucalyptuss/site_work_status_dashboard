@@ -46,7 +46,7 @@ VALID_TRUE = {"y", "yes", "true", "1"}
 VALID_FALSE = {"n", "no", "false", "0"}
 PROGRESS_RE = re.compile(r"^\s*([+-]?\d+(?:\.\d+)?)\s*/\s*([+-]?\d+(?:\.\d+)?)\s*$")
 DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
-dashboard_ver = ", v0.20"
+dashboard_ver = ", v1.00"
 
 STATUS_COLORS = {
     "green": "#2e7d32",
