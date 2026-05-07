@@ -19,7 +19,7 @@ FL017,NORTH ORANGE,US,FL,FT. Pierce,27.47557344,-80.56023026,America/New_York,Y,
 FL018,CLOVER,US,FL,FT. Pierce,27.47201472,-80.5202509,America/New_York,Y,-,-,-,-,-,-,-,-,2026-09-15,2026-09-21,1.5 ,81,-
 FL019,FAWN,US,FL,Palm City,27.04252957,-80.38046603,America/New_York,Y,-,-,-,-,-,-,-,-,2026-08-26,2026-09-01,1.5 ,81,-
 FL020,WHITE TAIL,US,FL,Palm City,27.04252959,-80.38046603,America/New_York,Y,-,-,-,-,-,-,-,-,2026-08-26,2026-08-31,1.5 ,81,-
-NM001,ROUTE 66,US,NM,San Fidel,35.09521279,-107.6156915,America/Denver,Y,-,-,-,-,-,-,-,-,Commercial operation,Commercial operation,1.5 ,48,-
+NM001,ROUTE 66,US,NM,San Fidel,35.09521279,-107.6156915,America/Denver,Y,-,-,-,66/66,-,-,-,-,Commercial operation,Commercial operation,1.5 ,48,-
 AZ001,WILMOT 2,US,AZ,Tucson,31.98738929,-110.8394235,America/Phoenix,Y,36/36,-,52/52,93/93,0/93,3.0.05,3.0.05,3.0.02_2024/12/12,2026-01-19,2026-03-04,1.5 ,93,-
 NV001,DRY LAKE EAST,US,NV,Las Vegas,36.38059974,-114.8749043,America/Los_Angeles,Y,-,-,-,-,-,-,-,-,2026-07-13,2026-08-06,1.0 ,264,-
 UT001,DOMINGUEZ,US,UT,Salt Lake City,40.76562241,-112.0054081,America/Denver,Y,-,-,1,85/127,-,3.0.05_3.0.06,3.0.05_3.0.06,3.0.02_2024/12/12,Commercial operation,Commercial operation,1.5 ,183,-
