@@ -46,6 +46,7 @@ VALID_TRUE = {"y", "yes", "true", "1"}
 VALID_FALSE = {"n", "no", "false", "0"}
 PROGRESS_RE = re.compile(r"^\s*([+-]?\d+(?:\.\d+)?)\s*/\s*([+-]?\d+(?:\.\d+)?)\s*$")
 DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
+dashboard_ver = ", v0.20"
 
 STATUS_COLORS = {
     "green": "#2e7d32",
@@ -195,25 +196,6 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
     if not task_columns:
         _add_issue(issues, None, "", "task_columns", "", "No task columns found after 'enabled'.", "ERROR")
 
-    for idx, row in working.iterrows():
-        location_id = row.get("location_id", "")
-        if str(location_id).strip() == "":
-            _add_issue(issues, int(idx), location_id, "location_id", location_id, "location_id is missing.", "ERROR")
-
-    if "location_id" in working.columns:
-        duplicated = working[working["location_id"].astype(str).str.strip().duplicated(keep=False)]
-        for idx, row in duplicated.iterrows():
-            if str(row.get("location_id", "")).strip():
-                _add_issue(
-                    issues,
-                    int(idx),
-                    row.get("location_id", ""),
-                    "location_id",
-                    row.get("location_id", ""),
-                    "Duplicate location_id. location_id must be unique.",
-                    "WARNING",
-                )
-
     working["_enabled_bool"] = working["enabled"].apply(normalize_enabled)
     for idx, row in working.iterrows():
         if row.get("_enabled_bool") is None:
@@ -227,9 +209,33 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
                 "WARNING",
             )
 
+    enabled_working = working[working["_enabled_bool"] == True].copy()  # noqa: E712
+
+    # Required field checks: enabled rows only.
+    for idx, row in enabled_working.iterrows():
+        location_id = row.get("location_id", "")
+        if str(location_id).strip() == "":
+            _add_issue(issues, int(idx), location_id, "location_id", location_id, "location_id is missing.", "ERROR")
+
+    # Duplicate location_id: check duplicates among enabled rows only.
+    if "location_id" in enabled_working.columns:
+        enabled_location_ids = enabled_working["location_id"].astype(str).str.strip()
+        duplicated = enabled_working[enabled_location_ids.duplicated(keep=False)]
+        for idx, row in duplicated.iterrows():
+            if str(row.get("location_id", "")).strip():
+                _add_issue(
+                    issues,
+                    int(idx),
+                    row.get("location_id", ""),
+                    "location_id",
+                    row.get("location_id", ""),
+                    "Duplicate location_id among enabled sites. location_id must be unique for active dashboard rows.",
+                    "WARNING",
+                )
+
     working["_latitude_num"] = pd.to_numeric(working["latitude"], errors="coerce")
     working["_longitude_num"] = pd.to_numeric(working["longitude"], errors="coerce")
-    for idx, row in working.iterrows():
+    for idx, row in working[working["_enabled_bool"] == True].iterrows():  # noqa: E712
         if pd.isna(row.get("_latitude_num")):
             _add_issue(
                 issues,
@@ -237,7 +243,7 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
                 row.get("location_id", ""),
                 "latitude",
                 row.get("latitude", ""),
-                "Latitude is missing or not numeric. Site cannot be displayed on the map.",
+                "Latitude is missing or not numeric. Enabled site cannot be displayed on the map.",
                 "ERROR",
             )
         if pd.isna(row.get("_longitude_num")):
@@ -247,11 +253,11 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
                 row.get("location_id", ""),
                 "longitude",
                 row.get("longitude", ""),
-                "Longitude is missing or not numeric. Site cannot be displayed on the map.",
+                "Longitude is missing or not numeric. Enabled site cannot be displayed on the map.",
                 "ERROR",
             )
 
-    for idx, row in working.iterrows():
+    for idx, row in working[working["_enabled_bool"] == True].iterrows():  # noqa: E712
         tz = str(row.get("timezone", "")).strip()
         if tz:
             try:
@@ -277,7 +283,7 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
                 "INFO",
             )
 
-    for idx, row in working.iterrows():
+    for idx, row in working[working["_enabled_bool"] == True].iterrows():  # noqa: E712
         for task in task_columns:
             parsed = parse_task_status_value(task, row.get(task, ""))
             if parsed["type"] == "invalid_progress":
@@ -297,7 +303,7 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
                     row.get("location_id", ""),
                     task,
                     row.get(task, ""),
-                    "Task value is missing.",
+                    "Task value is missing for an enabled site.",
                     "WARNING",
                 )
 
@@ -310,7 +316,6 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
     working["_data_issue_count"] = working["location_id"].astype(str).map(counts).fillna(0).astype(int)
     working["_has_data_issue"] = working["_data_issue_count"] > 0
     return working, issues
-
 
 def get_color_for_progress(percent: float | None) -> str:
     if percent is None or pd.isna(percent):
@@ -1186,6 +1191,57 @@ def render_floating_task_selector_css() -> None:
             background: #fff;
             margin-bottom: 0.5rem;
         }
+        .dashboard-meta-row {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            align-items: center;
+            gap: 0.75rem;
+            margin: 0.35rem 0 0.95rem 0;
+            width: 100%;
+        }
+        .dashboard-meta-item {
+            min-height: 2.35rem;
+            display: flex;
+            align-items: center;
+            color: var(--text-color, inherit);
+            font-size: 0.94rem;
+            font-weight: 700;
+            line-height: 1.25;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .dashboard-meta-item span {
+            color: inherit;
+        }
+        .dashboard-meta-left {
+            justify-content: flex-start;
+            text-align: left;
+        }
+        .dashboard-meta-center {
+            justify-content: center;
+            text-align: center;
+        }
+        .dashboard-meta-right {
+            justify-content: flex-end;
+            text-align: right;
+        }
+        .dashboard-meta-label {
+            font-weight: 800;
+            margin-right: 0.25rem;
+        }
+        .dashboard-meta-code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            color: inherit;
+            background: rgba(128, 128, 128, 0.14);
+            border: 1px solid rgba(128, 128, 128, 0.35);
+            border-radius: 0.35rem;
+            padding: 0.08rem 0.32rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 100%;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1335,6 +1391,31 @@ def render_safe_html(html_content: str) -> None:
         st.html(html_content)
     else:
         st.markdown(html_content, unsafe_allow_html=True)
+
+
+def render_dashboard_meta_header(source_name: str, total_sites: int) -> None:
+    """Render the dashboard meta header in equal-width left/center/right areas."""
+    safe_source_name = html.escape(str(source_name))
+    safe_total_sites = html.escape(str(total_sites))
+    render_safe_html(
+        f"""
+        <div class='dashboard-meta-row'>
+            <div class='dashboard-meta-item dashboard-meta-left'>
+                <span class='dashboard-meta-label'>Prepared by:</span>
+                <span>Byeonghun Kim</span>
+                <span>{dashboard_ver}</span>
+            </div>
+            <div class='dashboard-meta-item dashboard-meta-center'>
+                <span class='dashboard-meta-label'>Uploaded file:</span>
+                <span class='dashboard-meta-code'>{safe_source_name}</span>
+            </div>
+            <div class='dashboard-meta-item dashboard-meta-right'>
+                <span class='dashboard-meta-label'>Total sites:</span>
+                <span>{safe_total_sites}</span>
+            </div>
+        </div>
+        """
+    )
 
 
 def _kpi_card_html(
@@ -1574,10 +1655,7 @@ def main() -> None:
     filtered_df = apply_filters(validated_df, filters, selected_task_columns)
     kpis = calculate_kpis(validated_df, filtered_df, selected_task_columns, validation_issues)
 
-    header_cols = st.columns([2, 1, 1])
-    header_cols[0].markdown(f"Prepared by: Byeonghun Kim")
-    header_cols[1].markdown(f"**Uploaded file:** `{html.escape(source_name)}`")
-    header_cols[2].markdown(f"**Total sites:** {len(filtered_df)}")
+    render_dashboard_meta_header(source_name, len(filtered_df))
     render_kpi_cards(kpis)
 
     st.divider()
