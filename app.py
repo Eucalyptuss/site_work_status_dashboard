@@ -144,6 +144,10 @@ def get_task_columns(df: pd.DataFrame) -> list[str]:
     return task_columns
 
 
+def is_note_column(column_name: str) -> bool:
+    return str(column_name).strip().lower() == "note"
+
+
 def normalize_enabled(value: Any) -> bool | None:
     if value is None:
         return None
@@ -275,7 +279,7 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
 
     for idx, row in working.iterrows():
         for task in task_columns:
-            parsed = parse_status_value(row.get(task, ""))
+            parsed = parse_task_status_value(task, row.get(task, ""))
             if parsed["type"] == "invalid_progress":
                 _add_issue(
                     issues,
@@ -452,8 +456,28 @@ def parse_status_value(value: Any) -> dict[str, Any]:
     }
 
 
+def parse_task_status_value(task_name: str, value: Any) -> dict[str, Any]:
+    if is_note_column(task_name):
+        raw_value = value
+        if value is None or pd.isna(value):
+            display_text = ""
+        else:
+            display_text = str(value).strip()
+        return {
+            "raw_value": raw_value,
+            "type": "string_status",
+            "completed": None,
+            "total": None,
+            "percent": None,
+            "display_text": display_text,
+            "color": "gray",
+            "issue": None,
+        }
+    return parse_status_value(value)
+
+
 def parse_all_task_statuses(row: pd.Series, task_columns: list[str]) -> dict[str, dict[str, Any]]:
-    return {task: parse_status_value(row.get(task, "")) for task in task_columns}
+    return {task: parse_task_status_value(task, row.get(task, "")) for task in task_columns}
 
 
 def build_string_status_color_map(df: pd.DataFrame, task_columns: list[str]) -> dict[str, str]:
@@ -462,7 +486,7 @@ def build_string_status_color_map(df: pd.DataFrame, task_columns: list[str]) -> 
         if task not in df.columns:
             continue
         for value in df[task].dropna().astype(str):
-            parsed = parse_status_value(value)
+            parsed = parse_task_status_value(task, value)
             if parsed["type"] == "string_status":
                 values.add(parsed["display_text"])
     color_map: dict[str, str] = {}
@@ -587,7 +611,7 @@ def _sort_sites_by_version(version_map: dict[str, list[str]]) -> dict[str, list[
 
 
 def is_kpi_calculation_task(task_name: str) -> bool:
-    return str(task_name).strip().lower() != "note"
+    return not is_note_column(task_name)
 
 
 def calculate_kpis(
@@ -604,7 +628,6 @@ def calculate_kpis(
 
     for _, row in filtered_df.iterrows():
         parsed = parse_all_task_statuses(row, kpi_task_columns)
-
         site_name = _get_site_display_name(row)
         version = _get_site_version(row)
 
@@ -736,7 +759,7 @@ def build_site_label_html(row: pd.Series, selected_task_columns: list[str], show
     lines = [f"<div style='font-weight:800; margin-bottom:2px; color:#111827;'>{site_name}</div>"]
     if len(selected_task_columns) == 1:
         task = selected_task_columns[0]
-        parsed = parse_status_value(row.get(task, ""))
+        parsed = parse_task_status_value(task, row.get(task, ""))
         safe_task = html.escape(task)
         safe_display = html.escape(parsed["display_text"])
         badge_color = STATUS_COLORS.get(parsed["color"], STATUS_COLORS["gray"])
@@ -781,7 +804,7 @@ def build_popup_html(
 
     rows = []
     for task in selected:
-        parsed = parse_status_value(row.get(task, ""))
+        parsed = parse_task_status_value(task, row.get(task, ""))
         rows.append(
             "<tr>"
             f"<td style='padding:4px 7px; font-weight:600; border-bottom:1px solid #eef2f7;'>{html.escape(task)}</td>"
@@ -794,7 +817,7 @@ def build_popup_html(
         if remaining:
             rows.append("<tr><td colspan='2' style='padding:7px; color:#4b5563; border-top:1px solid #d1d5db; font-weight:700;'>Other tasks</td></tr>")
         for task in remaining:
-            parsed = parse_status_value(row.get(task, ""))
+            parsed = parse_task_status_value(task, row.get(task, ""))
             rows.append(
                 "<tr>"
                 f"<td style='padding:4px 7px; border-bottom:1px solid #eef2f7;'>{html.escape(task)}</td>"
@@ -1436,7 +1459,7 @@ def render_selected_site_detail(selected_site: pd.Series | None, task_columns: l
 
     st.markdown("#### Selected Work Items")
     for task in selected_task_columns:
-        _render_task_detail_row(task, parse_status_value(site.get(task, "")))
+        _render_task_detail_row(task, parse_task_status_value(task, site.get(task, "")))
 
 
 def _to_csv_bytes(df: pd.DataFrame) -> bytes:
@@ -1455,9 +1478,9 @@ def render_data_table(filtered_df: pd.DataFrame, selected_task_columns: list[str
         lambda row: calculate_site_summary_for_selected_tasks(row, selected_task_columns)["min_percent"], axis=1
     )
     for task in selected_task_columns:
-        table[f"{task}__display"] = table[task].apply(lambda value: parse_status_value(value)["display_text"])
+        table[f"{task}__display"] = table[task].apply(lambda value, task=task: parse_task_status_value(task, value)["display_text"])
         if len(selected_task_columns) == 1:
-            table[f"{task}__percent"] = table[task].apply(lambda value: parse_status_value(value)["percent"])
+            table[f"{task}__percent"] = table[task].apply(lambda value, task=task: parse_task_status_value(task, value)["percent"])
 
     base_cols = ["location_id", "location_name", "country", "state", "city", "enabled"]
     selected_display_cols = []
