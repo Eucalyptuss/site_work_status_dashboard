@@ -116,13 +116,6 @@ def _load_csv_bytes(file_bytes: bytes, source_name: str) -> pd.DataFrame:
 
 
 def get_default_site_status_csv() -> bytes:
-    """Return the bundled default CSV bytes.
-
-    Streamlit's file_uploader cannot be pre-populated with a local file, so the
-    app treats site_status.csv as the default data source until a user uploads
-    another CSV. If the packaged file is missing, the embedded sample is used as
-    a safe fallback.
-    """
     default_path = Path(__file__).with_name(DEFAULT_SITE_STATUS_FILENAME)
     if default_path.exists():
         return default_path.read_bytes()
@@ -137,11 +130,6 @@ def load_csv(uploaded_file: Any | None) -> pd.DataFrame:
 
 
 def get_task_columns(df: pd.DataFrame) -> list[str]:
-    """Return user-defined work item columns only.
-
-    Every column after `enabled` is treated as a work item except internal
-    columns created by this app. Internal columns always start with `_`.
-    """
     if "enabled" not in df.columns:
         return []
     enabled_idx = list(df.columns).index("enabled")
@@ -203,13 +191,11 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
     if not task_columns:
         _add_issue(issues, None, "", "task_columns", "", "No task columns found after 'enabled'.", "ERROR")
 
-    # Required field checks
     for idx, row in working.iterrows():
         location_id = row.get("location_id", "")
         if str(location_id).strip() == "":
             _add_issue(issues, int(idx), location_id, "location_id", location_id, "location_id is missing.", "ERROR")
 
-    # Duplicate location_id
     if "location_id" in working.columns:
         duplicated = working[working["location_id"].astype(str).str.strip().duplicated(keep=False)]
         for idx, row in duplicated.iterrows():
@@ -224,7 +210,6 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
                     "WARNING",
                 )
 
-    # Enabled normalization
     working["_enabled_bool"] = working["enabled"].apply(normalize_enabled)
     for idx, row in working.iterrows():
         if row.get("_enabled_bool") is None:
@@ -238,7 +223,6 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
                 "WARNING",
             )
 
-    # Coordinates
     working["_latitude_num"] = pd.to_numeric(working["latitude"], errors="coerce")
     working["_longitude_num"] = pd.to_numeric(working["longitude"], errors="coerce")
     for idx, row in working.iterrows():
@@ -263,7 +247,6 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
                 "ERROR",
             )
 
-    # Timezone validation
     for idx, row in working.iterrows():
         tz = str(row.get("timezone", "")).strip()
         if tz:
@@ -290,7 +273,6 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
                 "INFO",
             )
 
-    # Task parsing quality issues
     for idx, row in working.iterrows():
         for task in task_columns:
             parsed = parse_status_value(row.get(task, ""))
@@ -395,9 +377,6 @@ def parse_status_value(value: Any) -> dict[str, Any]:
             "issue": None,
         }
 
-    # Values containing an underscore are operational string/status values.
-    # Treat them as string_status even if they also contain symbols that could
-    # otherwise look like malformed progress data.
     if "_" in text:
         return {
             "raw_value": raw_value,
@@ -449,7 +428,6 @@ def parse_status_value(value: Any) -> dict[str, Any]:
             "issue": None,
         }
 
-    # Values containing slash are likely intended as progress and should be treated as invalid.
     if "/" in text:
         return {
             "raw_value": raw_value,
@@ -569,13 +547,46 @@ def _get_site_display_name(row: pd.Series) -> str:
     return location_id or "Unnamed site"
 
 
-def is_kpi_calculation_task(task_name: str) -> bool:
-    """Return whether a selected work item should affect Complete/Incomplete KPI counts.
+def _get_version_column_name(columns: Any) -> str | None:
+    """Find the product Version column using case-insensitive matching."""
+    for col in columns:
+        if str(col).strip().lower() == "version":
+            return str(col)
+    return None
 
-    The dashboard can still display operational note columns, but a column named
-    `note` is descriptive text and must not make a site complete or incomplete.
-    Matching is case-insensitive and ignores leading/trailing spaces.
-    """
+
+def _get_site_version(row: pd.Series) -> str:
+    """Return the Version value used to group KPI site names."""
+    version_col = _get_version_column_name(row.index)
+    if version_col is None:
+        return "No Version"
+    version = str(row.get(version_col, "")).strip()
+    return version if version else "No Version"
+
+
+def _version_sort_key(version: str) -> tuple[Any, ...]:
+    text = str(version).strip()
+    lowered = text.lower()
+    match = re.match(r"^\s*[vV]?\s*(\d+(?:\.\d+)*)(.*)$", text)
+    if match:
+        number_part = tuple(int(part) for part in match.group(1).split("."))
+        suffix = match.group(2).strip().lower()
+        return (0, number_part, suffix)
+    return (1, lowered)
+
+
+def _sort_site_names(site_names: list[str]) -> list[str]:
+    return sorted(site_names, key=lambda name: (str(name).casefold(), str(name)))
+
+
+def _sort_sites_by_version(version_map: dict[str, list[str]]) -> dict[str, list[str]]:
+    sorted_map: dict[str, list[str]] = {}
+    for version in sorted(version_map.keys(), key=_version_sort_key):
+        sorted_map[version] = _sort_site_names(version_map[version])
+    return sorted_map
+
+
+def is_kpi_calculation_task(task_name: str) -> bool:
     return str(task_name).strip().lower() != "note"
 
 
@@ -585,54 +596,31 @@ def calculate_kpis(
     selected_task_columns: list[str],
     validation_issues: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Calculate KPI cards for the current filtered dashboard view.
-
-    Display rules in this UI version:
-    - Total Sites means currently displayed / filtered sites.
-    - Urgent Sites and Warning Sites are not shown on the KPI board.
-    - Complete Sites and Incomplete Sites include all matching site names.
-    - A selected task column named `note` is excluded from Complete/Incomplete counts.
-    """
     displayed_sites = len(filtered_df)
-    complete_site_names: list[str] = []
-    incomplete_site_names: list[str] = []
+    complete_sites_by_version: dict[str, list[str]] = {}
+    incomplete_sites_by_version: dict[str, list[str]] = {}
 
-    # Exclude descriptive note columns from Complete/Incomplete KPI logic only.
-    # They remain visible in the task selector, map popup, detail panel, and table.
     kpi_task_columns = [task for task in selected_task_columns if is_kpi_calculation_task(task)]
 
     for _, row in filtered_df.iterrows():
         parsed = parse_all_task_statuses(row, kpi_task_columns)
 
         site_name = _get_site_display_name(row)
+        version = _get_site_version(row)
 
-        # KPI logic should be driven by progress-style work items only.
-        # String-only operational columns such as firmware version, status memo,
-        # or other descriptive values must not block a site from being counted
-        # as Complete when all selected progress-style work items are N/A.
-        #
-        # Because task columns are dynamic and there is no explicit schema flag
-        # saying "this is a progress column", the per-row parsed type is used:
-        # - progress / invalid_progress / missing / not_applicable are KPI-scope
-        # - string_status is display-only for Complete/Incomplete KPI counting
         kpi_scope_parsed = {
             task: status
             for task, status in parsed.items()
             if status["type"] != "string_status"
         }
 
-        # If every KPI-scope item is N/A for this site, there is no applicable
-        # unfinished progress work. Count the site as Complete even when other
-        # selected columns contain string values such as F/W versions.
         all_kpi_scope_items_are_not_applicable = bool(kpi_scope_parsed) and all(
             status["type"] == "not_applicable" for status in kpi_scope_parsed.values()
         )
         if all_kpi_scope_items_are_not_applicable:
-            complete_site_names.append(site_name)
+            complete_sites_by_version.setdefault(version, []).append(site_name)
             continue
 
-        # N/A means the work item does not apply to this specific site, so it is
-        # excluded from the denominator after the all-N/A case above is handled.
         applicable_parsed = {
             task: status
             for task, status in kpi_scope_parsed.items()
@@ -646,16 +634,26 @@ def calculate_kpis(
         has_numeric_below_100 = any((p["percent"] or 0) < 100 for p in progress_items)
         has_all_numeric_100 = bool(progress_items) and all((p["percent"] or 0) >= 100 for p in progress_items)
 
-        #site_name = _get_site_display_name(row)
         if has_all_numeric_100 and not has_dash_placeholder and not has_invalid_progress:
-            complete_site_names.append(site_name)
+            complete_sites_by_version.setdefault(version, []).append(site_name)
         if has_numeric_below_100 or has_dash_placeholder or has_invalid_progress:
-            incomplete_site_names.append(site_name)
+            incomplete_sites_by_version.setdefault(version, []).append(site_name)
+
+    complete_sites_by_version = _sort_sites_by_version(complete_sites_by_version)
+    incomplete_sites_by_version = _sort_sites_by_version(incomplete_sites_by_version)
+    complete_count = sum(len(site_names) for site_names in complete_sites_by_version.values())
+    incomplete_count = sum(len(site_names) for site_names in incomplete_sites_by_version.values())
 
     return {
         "Total Sites": {"count": displayed_sites},
-        "Complete Sites": {"count": len(complete_site_names), "sites": complete_site_names},
-        "Incomplete Sites": {"count": len(incomplete_site_names), "sites": incomplete_site_names},
+        "Complete Sites": {
+            "count": complete_count,
+            "sites_by_version": complete_sites_by_version,
+        },
+        "Incomplete Sites": {
+            "count": incomplete_count,
+            "sites_by_version": incomplete_sites_by_version,
+        },
     }
 
 
@@ -683,10 +681,8 @@ def filter_by_status_level(df: pd.DataFrame, selected_task_columns: list[str], s
 def apply_filters(df: pd.DataFrame, filters: dict[str, Any], selected_task_columns: list[str]) -> pd.DataFrame:
     filtered = df.copy()
 
-    # Disabled sites are always excluded in this UI version. The former sidebar
-    # option was removed to keep the operator view simpler.
-    filtered = filtered[filtered["_enabled_bool"] == True]  # noqa: E712
-    filtered = filtered[filtered["_can_display"] == True]  # noqa: E712
+    filtered = filtered[filtered["_enabled_bool"] == True]
+    filtered = filtered[filtered["_can_display"] == True]
 
     for field in ("country", "state", "city"):
         selected = filters.get(field, [])
@@ -705,7 +701,7 @@ def apply_filters(df: pd.DataFrame, filters: dict[str, Any], selected_task_colum
         filtered = filtered[haystack.str.contains(re.escape(query), na=False)]
 
     if filters.get("data_issue_only", False):
-        filtered = filtered[filtered["_has_data_issue"] == True]  # noqa: E712
+        filtered = filtered[filtered["_has_data_issue"] == True]
 
     levels = filters.get("status_levels", [])
     if levels:
@@ -770,7 +766,6 @@ def build_site_label_html(row: pd.Series, selected_task_columns: list[str], show
 
 
 def build_tooltip_text(row: pd.Series, selected_task_columns: list[str]) -> str:
-    # Tooltip must stay compact: show only the site name on hover.
     return str(row.get("location_name", ""))
 
 
@@ -865,11 +860,6 @@ def add_legend_to_map(map_obj: folium.Map) -> None:
 
 
 def build_site_marker_icon_html(row: pd.Series, selected_task_columns: list[str], color: str) -> str:
-    """Return a single clickable DivIcon containing the status dot and label.
-
-    This makes MarkerCluster hide the site label while clustered and show it
-    automatically when the marker is unclustered at higher zoom.
-    """
     label_html = build_site_label_html(row, selected_task_columns, show_labels=True)
     safe_color = html.escape(str(color))
     return f"""
@@ -895,10 +885,6 @@ def create_folium_map(
     initial_zoom = 10 if len(bounds_df) == 1 else 6
     map_obj = folium.Map(location=[center_lat, center_lon], zoom_start=initial_zoom, tiles="CartoDB positron", control_scale=True)
 
-    # Fit the initial viewport to all currently displayed enabled sites.
-    # With the default filter state this means all valid enabled locations in
-    # the active CSV. The dynamic st_folium key below forces this viewport to be
-    # recalculated when a different CSV is uploaded.
     if len(bounds_df) >= 2:
         map_obj.fit_bounds(
             bounds_df[["_latitude_num", "_longitude_num"]].values.tolist(),
@@ -1010,20 +996,30 @@ def render_floating_task_selector_css() -> None:
             font-weight: 800 !important;
             line-height: 1.05 !important;
         }
+        .kpi-card-row {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 1rem;
+            align-items: stretch;
+            margin-bottom: 0.75rem;
+        }
         .kpi-card {
             background: #ffffff;
             border: 1px solid #9ca3af;
             border-radius: 0.85rem;
             padding: 0.9rem 1rem;
-            margin-bottom: 0.75rem;
             box-shadow: 0 1px 5px rgba(0,0,0,0.12);
-            height: 13.2rem;
-            min-height: 13.2rem;
-            max-height: 13.2rem;
+            min-height: 6.2rem;
+            height: auto;
             display: flex;
             flex-direction: column;
             gap: 0.55rem;
-            overflow: hidden;
+            overflow: visible;
+        }
+        @media (max-width: 900px) {
+            .kpi-card-row {
+                grid-template-columns: 1fr;
+            }
         }
         .kpi-card-main {
             display: flex;
@@ -1048,12 +1044,12 @@ def render_floating_task_selector_css() -> None:
         }
         .kpi-site-list {
             display: flex;
-            flex-wrap: wrap;
+            flex-direction: column;
             align-content: flex-start;
-            align-items: flex-start;
-            gap: 0.35rem;
-            overflow-y: auto;
-            padding: 0.1rem 0.15rem 0.15rem 0;
+            align-items: stretch;
+            gap: 0;
+            overflow: visible;
+            padding: 0.1rem 0 0 0;
             flex: 1 1 auto;
         }
         .kpi-site-pill {
@@ -1074,6 +1070,53 @@ def render_floating_task_selector_css() -> None:
             color: #6b7280;
             font-size: 0.82rem;
             font-weight: 700;
+        }
+        .kpi-version-group {
+            width: 100%;
+            background: transparent;
+            padding: 0.42rem 0 0.52rem 0;
+        }
+        .kpi-version-group + .kpi-version-group {
+            border-top: 1px solid #cbd5e1;
+            margin-top: 0.28rem;
+            padding-top: 0.72rem;
+        }
+        .kpi-version-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            color: #111827;
+            font-size: 0.80rem;
+            font-weight: 900;
+            margin-bottom: 0.36rem;
+            line-height: 1.2;
+        }
+        .kpi-version-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            color: #111827;
+            font-weight: 900;
+        }
+        .kpi-version-label-prefix {
+            color: #4b5563;
+            font-size: 0.72rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .kpi-version-count {
+            color: #4b5563;
+            font-size: 0.72rem;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+        .kpi-version-sites {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-start;
+            gap: 0.3rem;
         }
         .map-control-panel {
             background: rgba(255,255,255,0.96);
@@ -1263,18 +1306,49 @@ def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[st
         "data_issue_only": data_issue_only,
     }
 
-def _kpi_card_html(title: str, count: Any, site_names: list[str] | None = None) -> str:
+
+def render_safe_html(html_content: str) -> None:
+    if hasattr(st, "html"):
+        st.html(html_content)
+    else:
+        st.markdown(html_content, unsafe_allow_html=True)
+
+
+def _kpi_card_html(
+    title: str,
+    count: Any,
+    sites_by_version: dict[str, list[str]] | None = None,
+) -> str:
     safe_title = html.escape(str(title))
     safe_count = html.escape(str(count))
     site_list_html = ""
-    if site_names is not None:
-        if site_names:
-            pills = "".join(
-                f"<span class='kpi-site-pill'>{html.escape(str(name))}</span>" for name in site_names
-            )
-            site_list_html = f"<div class='kpi-site-list'>{pills}</div>"
+
+    if sites_by_version is not None:
+        if sites_by_version:
+            version_groups: list[str] = []
+            for version, site_names in sites_by_version.items():
+                safe_version = html.escape(str(version))
+                safe_version_count = html.escape(str(len(site_names)))
+                pills = "".join(
+                    f"<span class='kpi-site-pill'>{html.escape(str(name))}</span>"
+                    for name in site_names
+                )
+                version_groups.append(
+                    "<div class='kpi-version-group'>"
+                    "<div class='kpi-version-header'>"
+                    "<span class='kpi-version-label'>"
+                    "<span class='kpi-version-label-prefix'>Version</span>"
+                    f"<span>{safe_version}</span>"
+                    "</span>"
+                    f"<span class='kpi-version-count'>{safe_version_count} site(s)</span>"
+                    "</div>"
+                    f"<div class='kpi-version-sites'>{pills}</div>"
+                    "</div>"
+                )
+            site_list_html = f"<div class='kpi-site-list'>{''.join(version_groups)}</div>"
         else:
             site_list_html = "<div class='kpi-site-list kpi-empty-sites'>No sites</div>"
+
     return f"""
     <div class='kpi-card'>
         <div class='kpi-card-main'>
@@ -1293,24 +1367,32 @@ def _kpi_count(kpis: dict[str, Any], label: str) -> Any:
     return value
 
 
-def _kpi_sites(kpis: dict[str, Any], label: str) -> list[str]:
+def _kpi_sites_by_version(kpis: dict[str, Any], label: str) -> dict[str, list[str]]:
     value = kpis.get(label, {})
     if isinstance(value, dict):
-        return list(value.get("sites", []))
-    return []
+        grouped = value.get("sites_by_version", {})
+        if isinstance(grouped, dict):
+            return {str(version): list(site_names) for version, site_names in grouped.items()}
+    return {}
 
 
 def render_kpi_cards(kpis: dict[str, Any]) -> None:
-    row = st.columns(3)
-    row[0].markdown(_kpi_card_html("Total Sites", _kpi_count(kpis, "Total Sites")), unsafe_allow_html=True)
-    row[1].markdown(
-        _kpi_card_html("Complete Sites", _kpi_count(kpis, "Complete Sites"), _kpi_sites(kpis, "Complete Sites")),
-        unsafe_allow_html=True,
+    cards_html = "".join(
+        [
+            _kpi_card_html("Total Sites", _kpi_count(kpis, "Total Sites")),
+            _kpi_card_html(
+                "Complete Sites",
+                _kpi_count(kpis, "Complete Sites"),
+                _kpi_sites_by_version(kpis, "Complete Sites"),
+            ),
+            _kpi_card_html(
+                "Incomplete Sites",
+                _kpi_count(kpis, "Incomplete Sites"),
+                _kpi_sites_by_version(kpis, "Incomplete Sites"),
+            ),
+        ]
     )
-    row[2].markdown(
-        _kpi_card_html("Incomplete Sites", _kpi_count(kpis, "Incomplete Sites"), _kpi_sites(kpis, "Incomplete Sites")),
-        unsafe_allow_html=True,
-    )
+    render_safe_html(f"<div class='kpi-card-row'>{cards_html}</div>")
 
 
 def _render_task_detail_row(task: str, parsed: dict[str, Any]) -> None:
@@ -1355,16 +1437,6 @@ def render_selected_site_detail(selected_site: pd.Series | None, task_columns: l
     st.markdown("#### Selected Work Items")
     for task in selected_task_columns:
         _render_task_detail_row(task, parse_status_value(site.get(task, "")))
-
-    # with st.expander("All work items"):
-    #     for task in task_columns:
-    #         if task not in selected_task_columns:
-    #             _render_task_detail_row(task, parse_status_value(site.get(task, "")))
-    #
-    # with st.expander("Future task_details.csv extension placeholder"):
-    #     st.caption(
-    #         "Planned fields: owner, status, detail, issue, action_plan, due_date, updated_at, updated_by, overdue, stale update."
-    #     )
 
 
 def _to_csv_bytes(df: pd.DataFrame) -> bytes:
@@ -1482,7 +1554,6 @@ def main() -> None:
     header_cols = st.columns([2, 1, 1])
     header_cols[0].markdown(f"Prepared by: Byeonghun Kim")
     header_cols[1].markdown(f"**Uploaded file:** `{html.escape(source_name)}`")
-    # header_cols[2].markdown(f"**Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     header_cols[2].markdown(f"**Total sites:** {len(filtered_df)}")
     render_kpi_cards(kpis)
 
