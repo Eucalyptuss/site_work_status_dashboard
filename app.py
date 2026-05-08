@@ -46,7 +46,7 @@ VALID_TRUE = {"y", "yes", "true", "1"}
 VALID_FALSE = {"n", "no", "false", "0"}
 PROGRESS_RE = re.compile(r"^\s*([+-]?\d+(?:\.\d+)?)\s*/\s*([+-]?\d+(?:\.\d+)?)\s*$")
 DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
-dashboard_ver = ", v1.00"
+dashboard_ver = ", v1.001"
 
 STATUS_COLORS = {
     "green": "#2e7d32",
@@ -1401,7 +1401,7 @@ def render_dashboard_meta_header(source_name: str, total_sites: int) -> None:
         f"""
         <div class='dashboard-meta-row'>
             <div class='dashboard-meta-item dashboard-meta-left'>
-                <span class='dashboard-meta-label'>Prepared by:</span>
+                <span class='dashboard-meta-label'>Developer:</span>
                 <span>Byeonghun Kim</span>
                 <span>{dashboard_ver}</span>
             </div>
