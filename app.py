@@ -1535,7 +1535,7 @@ def render_dashboard_meta_header(source_name: str, updated_date: str, total_site
         f"""
         <div class='dashboard-meta-row'>
             <div class='dashboard-meta-item dashboard-meta-left'>
-                <span class='dashboard-meta-label'>Prepared by:</span>
+                <span class='dashboard-meta-label'>Developer:</span>
                 <span>Byeonghun Kim, {dashboard_ver}</span>
             </div>
             <div class='dashboard-meta-item dashboard-meta-center'>
