@@ -49,7 +49,7 @@ DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
 SITE_METADATA_COLUMNS = {"version", "updated_date"}
 UPDATED_DATE_COLUMN_NAME = "updated_date"
 UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-dashboard_ver = "v1.01"
+dashboard_ver = "v1.02"
 
 STATUS_COLORS = {
     "green": "#2e7d32",
@@ -721,6 +721,24 @@ def _sort_sites_by_version(version_map: dict[str, list[str]]) -> dict[str, list[
     return sorted_map
 
 
+def get_version_filter_options(df: pd.DataFrame) -> list[str]:
+    version_col = _get_version_column_name(df.columns)
+    if version_col is None:
+        return []
+
+    source_df = df.copy()
+    if "_enabled_bool" in source_df.columns:
+        source_df = source_df[source_df["_enabled_bool"] == True]  # noqa: E712
+    if "_can_display" in source_df.columns:
+        source_df = source_df[source_df["_can_display"] == True]  # noqa: E712
+
+    versions = {
+        str(value).strip() if str(value).strip() else "No Version"
+        for value in source_df[version_col].dropna().tolist()
+    }
+    return sorted(versions, key=_version_sort_key)
+
+
 def is_kpi_calculation_task(task_name: str) -> bool:
     return not is_note_column(task_name) and not is_site_metadata_column(task_name)
 
@@ -822,6 +840,12 @@ def apply_filters(df: pd.DataFrame, filters: dict[str, Any], selected_task_colum
         selected = filters.get(field, [])
         if selected:
             filtered = filtered[filtered[field].astype(str).isin(selected)]
+
+    selected_versions = filters.get("version", [])
+    if selected_versions:
+        filtered = filtered[
+            filtered.apply(lambda row: _get_site_version(row) in selected_versions, axis=1)
+        ]
 
     query = str(filters.get("search", "")).strip().lower()
     if query:
@@ -1484,6 +1508,7 @@ def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[st
             "filter_country",
             "filter_state",
             "filter_city",
+            "filter_version",
             "filter_search",
             "filter_status_levels",
             "filter_data_issue_only",
@@ -1500,6 +1525,8 @@ def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[st
     country = st.sidebar.multiselect("Country", unique_options("country"), key="filter_country")
     state = st.sidebar.multiselect("State", unique_options("state"), key="filter_state")
     city = st.sidebar.multiselect("City", unique_options("city"), key="filter_city")
+    version_options = get_version_filter_options(df)
+    version = st.sidebar.multiselect("Version", version_options, key="filter_version") if version_options else []
     search = st.sidebar.text_input("Search location_id / location_name / city", key="filter_search")
 
     status_levels = st.sidebar.multiselect(
@@ -1513,6 +1540,7 @@ def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[st
         "country": country,
         "state": state,
         "city": city,
+        "version": version,
         "search": search,
         "status_levels": status_levels,
         "data_issue_only": data_issue_only,
