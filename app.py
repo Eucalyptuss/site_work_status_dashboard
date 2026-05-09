@@ -46,7 +46,10 @@ VALID_TRUE = {"y", "yes", "true", "1"}
 VALID_FALSE = {"n", "no", "false", "0"}
 PROGRESS_RE = re.compile(r"^\s*([+-]?\d+(?:\.\d+)?)\s*/\s*([+-]?\d+(?:\.\d+)?)\s*$")
 DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
-dashboard_ver = ", v1.001"
+SITE_METADATA_COLUMNS = {"version", "updated_date"}
+UPDATED_DATE_COLUMN_NAME = "updated_date"
+UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+dashboard_ver = "v1.01"
 
 STATUS_COLORS = {
     "green": "#2e7d32",
@@ -108,7 +111,10 @@ def _load_csv_bytes(file_bytes: bytes, source_name: str) -> pd.DataFrame:
     last_error: Exception | None = None
     for encoding in ("utf-8-sig", "utf-8", "cp949"):
         try:
-            return pd.read_csv(io.BytesIO(file_bytes), encoding=encoding, dtype=str, keep_default_na=False)
+            text = file_bytes.decode(encoding)
+            first_line = text.splitlines()[0] if text.splitlines() else ""
+            sep = "\t" if first_line.count("\t") > first_line.count(",") else ","
+            return pd.read_csv(io.StringIO(text), sep=sep, dtype=str, keep_default_na=False)
         except UnicodeDecodeError as exc:
             last_error = exc
         except Exception as exc:
@@ -130,6 +136,110 @@ def load_csv(uploaded_file: Any | None) -> pd.DataFrame:
     return _load_csv_bytes(file_bytes, uploaded_file.name)
 
 
+def _find_case_insensitive_column(columns: Any, target_name: str) -> str | None:
+    target = str(target_name).strip().lower()
+    for col in columns:
+        if str(col).strip().lower() == target:
+            return str(col)
+    return None
+
+
+def is_site_metadata_column(column_name: str) -> bool:
+    return str(column_name).strip().lower() in SITE_METADATA_COLUMNS
+
+
+def _get_updated_date_column_name(columns: Any) -> str | None:
+    return _find_case_insensitive_column(columns, UPDATED_DATE_COLUMN_NAME)
+
+
+def get_updated_date_display(df: pd.DataFrame) -> str:
+    updated_date_col = _get_updated_date_column_name(df.columns)
+    if updated_date_col is None:
+        return "Not set"
+
+    source_df = df
+    if "_enabled_bool" in source_df.columns:
+        source_df = source_df[source_df["_enabled_bool"] == True]  # noqa: E712
+
+    values = [
+        str(value).strip()
+        for value in source_df[updated_date_col].dropna().tolist()
+        if str(value).strip()
+    ]
+    return values[0] if values else "Not set"
+
+
+def _validate_updated_date_metadata(
+    working: pd.DataFrame,
+    enabled_working: pd.DataFrame,
+    issues: list[dict[str, Any]],
+) -> None:
+    updated_date_col = _get_updated_date_column_name(working.columns)
+    if updated_date_col is None:
+        _add_issue(
+            issues,
+            None,
+            "",
+            UPDATED_DATE_COLUMN_NAME,
+            "",
+            "Optional metadata column 'updated_date' is missing. Add it to show Updated Date in the dashboard header.",
+            "INFO",
+        )
+        return
+
+    non_empty_values: list[str] = []
+    for idx, row in enabled_working.iterrows():
+        raw_value = row.get(updated_date_col, "")
+        text = str(raw_value).strip()
+        if not text:
+            _add_issue(
+                issues,
+                int(idx),
+                row.get("location_id", ""),
+                updated_date_col,
+                raw_value,
+                "updated_date is missing for an enabled site. Use YYYY-MM-DD, e.g. 2026-05-09.",
+                "WARNING",
+            )
+            continue
+        non_empty_values.append(text)
+        if not UPDATED_DATE_RE.match(text):
+            _add_issue(
+                issues,
+                int(idx),
+                row.get("location_id", ""),
+                updated_date_col,
+                raw_value,
+                "updated_date should use YYYY-MM-DD format, e.g. 2026-05-09.",
+                "WARNING",
+            )
+            continue
+        try:
+            datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            _add_issue(
+                issues,
+                int(idx),
+                row.get("location_id", ""),
+                updated_date_col,
+                raw_value,
+                "updated_date is not a valid calendar date.",
+                "WARNING",
+            )
+
+    distinct_values = sorted(set(non_empty_values))
+    if len(distinct_values) > 1:
+        _add_issue(
+            issues,
+            None,
+            "",
+            updated_date_col,
+            "; ".join(distinct_values),
+            "Enabled rows contain multiple updated_date values. Use one dashboard-level data date unless row-level dates are intentional.",
+            "WARNING",
+        )
+
+
 def get_task_columns(df: pd.DataFrame) -> list[str]:
     if "enabled" not in df.columns:
         return []
@@ -140,6 +250,8 @@ def get_task_columns(df: pd.DataFrame) -> list[str]:
         if not col_name.strip():
             continue
         if col_name.startswith("_"):
+            continue
+        if is_site_metadata_column(col_name):
             continue
         task_columns.append(col_name)
     return task_columns
@@ -211,13 +323,13 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
 
     enabled_working = working[working["_enabled_bool"] == True].copy()  # noqa: E712
 
-    # Required field checks: enabled rows only.
+    _validate_updated_date_metadata(working, enabled_working, issues)
+
     for idx, row in enabled_working.iterrows():
         location_id = row.get("location_id", "")
         if str(location_id).strip() == "":
             _add_issue(issues, int(idx), location_id, "location_id", location_id, "location_id is missing.", "ERROR")
 
-    # Duplicate location_id: check duplicates among enabled rows only.
     if "location_id" in enabled_working.columns:
         enabled_location_ids = enabled_working["location_id"].astype(str).str.strip()
         duplicated = enabled_working[enabled_location_ids.duplicated(keep=False)]
@@ -371,7 +483,7 @@ def parse_status_value(value: Any) -> dict[str, Any]:
             "percent": None,
             "display_text": "-",
             "color": "darkgray",
-            "issue": None, #"Dash placeholder value.",
+            "issue": None,
         }
 
     if text.lower() in NA_VALUES:
@@ -568,7 +680,6 @@ def calculate_status_level(row: pd.Series, selected_task_columns: list[str]) -> 
 
 
 def _get_site_display_name(row: pd.Series) -> str:
-    """Return a compact human-readable site name for KPI lists."""
     name = str(row.get("location_name", "")).strip()
     if name:
         return name
@@ -577,15 +688,10 @@ def _get_site_display_name(row: pd.Series) -> str:
 
 
 def _get_version_column_name(columns: Any) -> str | None:
-    """Find the product Version column using case-insensitive matching."""
-    for col in columns:
-        if str(col).strip().lower() == "version":
-            return str(col)
-    return None
+    return _find_case_insensitive_column(columns, "version")
 
 
 def _get_site_version(row: pd.Series) -> str:
-    """Return the Version value used to group KPI site names."""
     version_col = _get_version_column_name(row.index)
     if version_col is None:
         return "No Version"
@@ -616,7 +722,7 @@ def _sort_sites_by_version(version_map: dict[str, list[str]]) -> dict[str, list[
 
 
 def is_kpi_calculation_task(task_name: str) -> bool:
-    return not is_note_column(task_name)
+    return not is_note_column(task_name) and not is_site_metadata_column(task_name)
 
 
 def calculate_kpis(
@@ -1193,8 +1299,8 @@ def render_floating_task_selector_css() -> None:
         }
         .dashboard-meta-row {
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            align-items: center;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            align-items: stretch;
             gap: 0.75rem;
             margin: 0.35rem 0 0.95rem 0;
             width: 100%;
@@ -1207,9 +1313,11 @@ def render_floating_task_selector_css() -> None:
             font-size: 0.94rem;
             font-weight: 700;
             line-height: 1.25;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            min-width: 0;
+            white-space: normal;
+            overflow: visible;
+            text-overflow: clip;
+            word-break: break-word;
         }
         .dashboard-meta-item span {
             color: inherit;
@@ -1229,6 +1337,7 @@ def render_floating_task_selector_css() -> None:
         .dashboard-meta-label {
             font-weight: 800;
             margin-right: 0.25rem;
+            flex: 0 0 auto;
         }
         .dashboard-meta-code {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
@@ -1237,10 +1346,34 @@ def render_floating_task_selector_css() -> None:
             border: 1px solid rgba(128, 128, 128, 0.35);
             border-radius: 0.35rem;
             padding: 0.08rem 0.32rem;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            min-width: 0;
             max-width: 100%;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            white-space: normal;
+        }
+        @media (max-width: 1050px) {
+            .dashboard-meta-row {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.45rem 0.75rem;
+            }
+            .dashboard-meta-item,
+            .dashboard-meta-left,
+            .dashboard-meta-center,
+            .dashboard-meta-right {
+                justify-content: flex-start;
+                text-align: left;
+            }
+        }
+        @media (max-width: 620px) {
+            .dashboard-meta-row {
+                grid-template-columns: 1fr;
+                gap: 0.35rem;
+            }
+            .dashboard-meta-item {
+                min-height: 2.0rem;
+                align-items: flex-start;
+            }
         }
         </style>
         """,
@@ -1393,21 +1526,25 @@ def render_safe_html(html_content: str) -> None:
         st.markdown(html_content, unsafe_allow_html=True)
 
 
-def render_dashboard_meta_header(source_name: str, total_sites: int) -> None:
-    """Render the dashboard meta header in equal-width left/center/right areas."""
+def render_dashboard_meta_header(source_name: str, updated_date: str, total_sites: int) -> None:
+    """Render the dashboard meta header in four equal-width areas."""
     safe_source_name = html.escape(str(source_name))
+    safe_updated_date = html.escape(str(updated_date))
     safe_total_sites = html.escape(str(total_sites))
     render_safe_html(
         f"""
         <div class='dashboard-meta-row'>
             <div class='dashboard-meta-item dashboard-meta-left'>
-                <span class='dashboard-meta-label'>Developer:</span>
-                <span>Byeonghun Kim</span>
-                <span>{dashboard_ver}</span>
+                <span class='dashboard-meta-label'>Prepared by:</span>
+                <span>Byeonghun Kim, {dashboard_ver}</span>
             </div>
             <div class='dashboard-meta-item dashboard-meta-center'>
                 <span class='dashboard-meta-label'>Uploaded file:</span>
                 <span class='dashboard-meta-code'>{safe_source_name}</span>
+            </div>
+            <div class='dashboard-meta-item dashboard-meta-center'>
+                <span class='dashboard-meta-label'>Updated Date:</span>
+                <span class='dashboard-meta-code'>{safe_updated_date}</span>
             </div>
             <div class='dashboard-meta-item dashboard-meta-right'>
                 <span class='dashboard-meta-label'>Total sites:</span>
@@ -1655,7 +1792,8 @@ def main() -> None:
     filtered_df = apply_filters(validated_df, filters, selected_task_columns)
     kpis = calculate_kpis(validated_df, filtered_df, selected_task_columns, validation_issues)
 
-    render_dashboard_meta_header(source_name, len(filtered_df))
+    updated_date_display = get_updated_date_display(validated_df)
+    render_dashboard_meta_header(source_name, updated_date_display, len(filtered_df))
     render_kpi_cards(kpis)
 
     st.divider()
