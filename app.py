@@ -46,10 +46,12 @@ VALID_TRUE = {"y", "yes", "true", "1"}
 VALID_FALSE = {"n", "no", "false", "0"}
 PROGRESS_RE = re.compile(r"^\s*([+-]?\d+(?:\.\d+)?)\s*/\s*([+-]?\d+(?:\.\d+)?)\s*$")
 DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
-SITE_METADATA_COLUMNS = {"version", "updated_date"}
+SITE_METADATA_COLUMNS = {"version", "updated_date", "qty", "note"}
 UPDATED_DATE_COLUMN_NAME = "updated_date"
 UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-dashboard_ver = "v1.02"
+dashboard_ver = "v1.10"
+DEFAULT_TASK_CONFIG_FILENAME = "task_config.csv"
+TASK_CONFIG_COLUMNS = ["task_name", "visible", "category", "display_order", "description"]
 
 STATUS_COLORS = {
     "green": "#2e7d32",
@@ -88,10 +90,19 @@ STRING_STATUS_PALETTE = [
     "#f4511e",
 ]
 
-SAMPLE_CSV = """location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,나비볼밸브,솔밸브 오링,워터펌프 누수점검,Chiller F/W Version,HVAC F/W Version
+SAMPLE_CSV = """location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,Valve1,Valve2,Water Pump,Chiller F/W Version,HVAC F/W Version
 FL001,BLACKWATER RIVER,US,FL,Milton,30.6,-86.9,America/Chicago,Y,60/66,N/A,10/66,3.0.0.0,3.0.0.1
 FL002,CANOE,US,FL,Holt,30.6,-86.7,America/Chicago,Y,20/183,183/183,183/183,3.0.0.2,3.0.0.6
 FL003,SAMPLE DISABLED,US,TX,Dallas,32.7,-96.7,America/Chicago,N,5/10,NA,,Pending,Completed
+"""
+
+SAMPLE_TASK_CONFIG_CSV = """task_name,visible,category,display_order,description
+Valve1,Y,Active Work,10,Currently managed work item
+Valve2,Y,Active Work,20,Currently managed work item
+Water Pump,Y,Active Work,30,Currently managed work item
+Chiller F/W Version,Y,Information,40,Firmware version information
+HVAC F/W Version,Y,Information,50,Firmware version information
+Note,Y,Information,999,Free text notes; excluded from KPI completion counts
 """
 
 
@@ -104,6 +115,10 @@ def get_required_columns() -> list[str]:
 
 def create_sample_csv() -> bytes:
     return SAMPLE_CSV.encode("utf-8-sig")
+
+
+def create_sample_task_config_csv() -> bytes:
+    return SAMPLE_TASK_CONFIG_CSV.encode("utf-8-sig")
 
 
 @st.cache_data(show_spinner=False)
@@ -134,6 +149,22 @@ def load_csv(uploaded_file: Any | None) -> pd.DataFrame:
         return _load_csv_bytes(get_default_site_status_csv(), DEFAULT_SITE_STATUS_FILENAME)
     file_bytes = uploaded_file.getvalue()
     return _load_csv_bytes(file_bytes, uploaded_file.name)
+
+
+def get_default_task_config_csv() -> bytes | None:
+    default_path = Path(__file__).with_name(DEFAULT_TASK_CONFIG_FILENAME)
+    if default_path.exists():
+        return default_path.read_bytes()
+    return None
+
+
+def load_task_config(uploaded_file: Any | None) -> pd.DataFrame:
+    if uploaded_file is None:
+        default_bytes = get_default_task_config_csv()
+        if default_bytes is None:
+            return pd.DataFrame(columns=TASK_CONFIG_COLUMNS)
+        return _load_csv_bytes(default_bytes, DEFAULT_TASK_CONFIG_FILENAME)
+    return _load_csv_bytes(uploaded_file.getvalue(), uploaded_file.name)
 
 
 def _find_case_insensitive_column(columns: Any, target_name: str) -> str | None:
@@ -240,6 +271,150 @@ def _validate_updated_date_metadata(
         )
 
 
+def _normalize_task_config_visible(value: Any) -> bool:
+    if value is None or pd.isna(value):
+        return True
+    text = str(value).strip().lower()
+    if text == "":
+        return True
+    if text in VALID_TRUE:
+        return True
+    if text in VALID_FALSE:
+        return False
+    return True
+
+
+def _parse_task_display_order(value: Any, fallback_order: int) -> tuple[int, int]:
+    if value is None or pd.isna(value) or str(value).strip() == "":
+        return (1, fallback_order)
+    try:
+        return (0, int(float(str(value).strip())))
+    except Exception:
+        return (1, fallback_order)
+
+
+def _get_task_config_column(task_config_df: pd.DataFrame, column_name: str) -> str | None:
+    return _find_case_insensitive_column(task_config_df.columns, column_name)
+
+
+def apply_task_config_to_task_columns(
+    all_task_columns: list[str],
+    task_config_df: pd.DataFrame,
+) -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
+
+    issues: list[dict[str, Any]] = []
+    meta: dict[str, Any] = {
+        "config_loaded": not task_config_df.empty,
+        "hidden_tasks": [],
+        "unknown_config_tasks": [],
+        "invalid_visible_rows": 0,
+    }
+
+    if task_config_df.empty:
+        return all_task_columns.copy(), issues, meta
+
+    task_name_col = _get_task_config_column(task_config_df, "task_name")
+    if task_name_col is None:
+        _add_issue(
+            issues,
+            None,
+            "",
+            "task_config.task_name",
+            "",
+            "task_config.csv is loaded but missing required column 'task_name'. All task columns will remain visible.",
+            "WARNING",
+        )
+        return all_task_columns.copy(), issues, meta
+
+    visible_col = _get_task_config_column(task_config_df, "visible")
+    order_col = _get_task_config_column(task_config_df, "display_order")
+
+    task_lookup = {str(task).strip().casefold(): task for task in all_task_columns}
+    config_by_task_key: dict[str, dict[str, Any]] = {}
+    duplicate_keys: set[str] = set()
+
+    for idx, row in task_config_df.iterrows():
+        raw_task_name = row.get(task_name_col, "")
+        task_name = str(raw_task_name).strip()
+        if not task_name:
+            _add_issue(
+                issues,
+                int(idx),
+                "",
+                "task_config.task_name",
+                raw_task_name,
+                "task_config.csv contains a blank task_name row. The row is ignored.",
+                "WARNING",
+            )
+            continue
+
+        task_key = task_name.casefold()
+        if task_key in config_by_task_key:
+            duplicate_keys.add(task_key)
+
+        raw_visible = row.get(visible_col, "Y") if visible_col is not None else "Y"
+        visible_text = str(raw_visible).strip().lower()
+        if visible_text and visible_text not in VALID_TRUE and visible_text not in VALID_FALSE:
+            meta["invalid_visible_rows"] += 1
+            _add_issue(
+                issues,
+                int(idx),
+                "",
+                "task_config.visible",
+                raw_visible,
+                "Invalid visible value in task_config.csv. Use Y/Yes/TRUE/1 or N/No/FALSE/0. This row defaults to visible=Y.",
+                "WARNING",
+            )
+
+        config_by_task_key[task_key] = {
+            "task_name": task_name,
+            "visible": _normalize_task_config_visible(raw_visible),
+            "display_order": row.get(order_col, "") if order_col is not None else "",
+            "row_index": int(idx),
+        }
+
+    for task_key in sorted(duplicate_keys):
+        _add_issue(
+            issues,
+            None,
+            "",
+            "task_config.task_name",
+            config_by_task_key[task_key]["task_name"],
+            "Duplicate task_name in task_config.csv. The last matching row is used.",
+            "WARNING",
+        )
+
+    for task_key, config in config_by_task_key.items():
+        if task_key not in task_lookup:
+            meta["unknown_config_tasks"].append(config["task_name"])
+            _add_issue(
+                issues,
+                config.get("row_index"),
+                "",
+                "task_config.task_name",
+                config["task_name"],
+                "task_config.csv references a task not found in site_status.csv. The row is ignored.",
+                "INFO",
+            )
+
+    ordered_visible_tasks: list[tuple[tuple[int, int], int, str]] = []
+    hidden_tasks: list[str] = []
+    for fallback_order, task in enumerate(all_task_columns):
+        task_key = str(task).strip().casefold()
+        config = config_by_task_key.get(task_key)
+        visible = True if config is None else bool(config["visible"])
+        if not visible:
+            hidden_tasks.append(task)
+            continue
+        display_order_value = config.get("display_order", "") if config is not None else ""
+        order_key = _parse_task_display_order(display_order_value, fallback_order)
+        ordered_visible_tasks.append((order_key, fallback_order, task))
+
+    meta["hidden_tasks"] = hidden_tasks
+    visible_tasks = [task for _, _, task in sorted(ordered_visible_tasks, key=lambda item: (item[0], item[1]))]
+    return visible_tasks, issues, meta
+
+
 def get_task_columns(df: pd.DataFrame) -> list[str]:
     if "enabled" not in df.columns:
         return []
@@ -295,7 +470,11 @@ def _add_issue(
     )
 
 
-def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+def validate_dataframe(
+    df: pd.DataFrame,
+    task_columns_to_validate: list[str] | None = None,
+    require_task_columns: bool = True,
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     issues: list[dict[str, Any]] = []
     working = df.copy()
 
@@ -304,8 +483,8 @@ def validate_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, A
             _add_issue(issues, None, "", col, "", f"Required column '{col}' is missing.", "ERROR")
             working[col] = ""
 
-    task_columns = get_task_columns(working)
-    if not task_columns:
+    task_columns = task_columns_to_validate if task_columns_to_validate is not None else get_task_columns(working)
+    if require_task_columns and not task_columns:
         _add_issue(issues, None, "", "task_columns", "", "No task columns found after 'enabled'.", "ERROR")
 
     working["_enabled_bool"] = working["enabled"].apply(normalize_enabled)
@@ -1457,9 +1636,12 @@ def render_task_selector(task_columns: list[str]) -> list[str]:
             for task in task_columns:
                 st.session_state[f"task_checkbox__{task}"] = True
 
-    with st.sidebar.container():
-        for task in task_columns:
-            st.checkbox(task, key=f"task_checkbox__{task}")
+    if not task_columns:
+        st.sidebar.info("No visible work items. Edit task_config.csv to set at least one task visible=Y.")
+    else:
+        with st.sidebar.container():
+            for task in task_columns:
+                st.checkbox(task, key=f"task_checkbox__{task}")
 
     selected = get_selected_task_columns(task_columns)
     st.sidebar.caption(f"Selected: {len(selected)} / {len(task_columns)}")
@@ -1486,19 +1668,45 @@ def get_uploaded_file_from_state() -> Any | None:
     return st.session_state.get("uploaded_site_status_csv")
 
 
-def render_sidebar_upload_bottom(source_name: str) -> Any | None:
+def get_uploaded_task_config_from_state() -> Any | None:
+    return st.session_state.get("uploaded_task_config_csv")
+
+
+def render_sidebar_upload_bottom(source_name: str, task_config_source_name: str) -> tuple[Any | None, Any | None]:
     st.sidebar.divider()
     st.sidebar.subheader("CSV")
     uploaded_file = st.sidebar.file_uploader("Upload site status CSV", type=["csv"], key="uploaded_site_status_csv")
     st.sidebar.download_button(
-        "Download sample CSV template",
+        "Download sample site status CSV",
         data=create_sample_csv(),
         file_name="sample_site_status.csv",
         mime="text/csv",
         use_container_width=True,
     )
-    st.sidebar.caption(f"Current file: {source_name}")
-    return uploaded_file
+    st.sidebar.caption(f"Current site status file: {source_name}")
+
+    st.sidebar.divider()
+    st.sidebar.subheader("Task Config")
+    uploaded_task_config = st.sidebar.file_uploader("Upload task_config CSV", type=["csv"], key="uploaded_task_config_csv")
+    st.sidebar.download_button(
+        "Download sample task_config CSV",
+        data=create_sample_task_config_csv(),
+        file_name="task_config.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    st.sidebar.caption(f"Current task config file: {task_config_source_name}")
+    return uploaded_file, uploaded_task_config
+
+
+def render_task_config_summary(all_task_columns: list[str], visible_task_columns: list[str], task_config_meta: dict[str, Any]) -> None:
+    hidden_tasks = list(task_config_meta.get("hidden_tasks", []))
+    st.sidebar.caption(f"Visible tasks: {len(visible_task_columns)} / {len(all_task_columns)}")
+    if hidden_tasks:
+        preview = ", ".join(str(task) for task in hidden_tasks[:6])
+        if len(hidden_tasks) > 6:
+            preview += f", +{len(hidden_tasks) - 6} more"
+        st.sidebar.caption(f"Hidden by task_config: {preview}")
 
 
 def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[str, Any]:
@@ -1790,26 +1998,45 @@ def main() -> None:
     st.title("Site Work Status Map Dashboard")
 
     uploaded_file = get_uploaded_file_from_state()
+    uploaded_task_config = get_uploaded_task_config_from_state()
     try:
         raw_df = load_csv(uploaded_file)
+        task_config_df = load_task_config(uploaded_task_config)
     except Exception as exc:
         st.error(str(exc))
         st.stop()
 
     source_name = uploaded_file.name if uploaded_file is not None else DEFAULT_SITE_STATUS_FILENAME
-    validated_df, validation_issues = validate_dataframe(raw_df)
-    task_columns = get_task_columns(validated_df)
+    bundled_task_config_exists = get_default_task_config_csv() is not None
+    task_config_source_name = (
+        uploaded_task_config.name
+        if uploaded_task_config is not None
+        else (DEFAULT_TASK_CONFIG_FILENAME if bundled_task_config_exists else "Not loaded")
+    )
 
-    if not task_columns:
+    all_task_columns = get_task_columns(raw_df)
+    task_columns, task_config_issues, task_config_meta = apply_task_config_to_task_columns(all_task_columns, task_config_df)
+    validated_df, validation_issues = validate_dataframe(
+        raw_df,
+        task_columns_to_validate=task_columns,
+        require_task_columns=not bool(all_task_columns),
+    )
+    validation_issues = validation_issues + task_config_issues
+
+    if not all_task_columns:
         st.error("No task columns found after the enabled column. Add at least one work item column.")
-        render_sidebar_upload_bottom(source_name)
+        render_sidebar_upload_bottom(source_name, task_config_source_name)
         issue_df = render_data_quality_report(validation_issues)
         render_download_buttons(pd.DataFrame(), issue_df)
         st.stop()
 
+    if not task_columns:
+        st.warning("All work items are hidden by task_config.csv. The dashboard will show site/map context only until at least one task is set visible=Y.")
+
     selected_task_columns = render_task_selector(task_columns)
+    render_task_config_summary(all_task_columns, task_columns, task_config_meta)
     filters = render_sidebar_filters(validated_df, task_columns)
-    render_sidebar_upload_bottom(source_name)
+    render_sidebar_upload_bottom(source_name, task_config_source_name)
 
     options = {
         "show_site_labels": True,
