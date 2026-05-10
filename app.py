@@ -49,7 +49,7 @@ DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
 SITE_METADATA_COLUMNS = {"version", "updated_date"}
 UPDATED_DATE_COLUMN_NAME = "updated_date"
 UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-dashboard_ver = "v1.21"
+dashboard_ver = "v1.22"
 DEFAULT_TASK_CONFIG_FILENAME = "task_config.csv"
 TASK_CONFIG_COLUMNS = ["task_name", "visible", "category", "display_order", "description"]
 
@@ -57,10 +57,10 @@ CCX_START_COLUMN_NAME = "CCx Start"
 HCX_START_COLUMN_NAME = "HCx Start"
 GANTT_TABLE_HIDE_BREAKPOINT_PX = 1100
 GANTT_LOOKBACK_DAYS = 7
-GANTT_LOOKAHEAD_MONTHS = 1
-GANTT_PHASE_BAR_DAYS = 14
+GANTT_LOOKAHEAD_MONTHS = 2
+GANTT_PHASE_BAR_DAYS = 21
 GANTT_SHOW_ALL_END_PADDING_DAYS = 7
-GANTT_COMPLETED_HIDE_AFTER_DAYS = 14
+GANTT_COMPLETED_HIDE_AFTER_DAYS = 21
 GANTT_CCX_COLOR = "#2563eb"
 GANTT_HCX_COLOR = "#dc2626"
 GANTT_TODAY_COLOR = "#f59e0b"
@@ -1570,6 +1570,11 @@ def _build_gantt_rows(
     return rows, window_start, window_end, today, include_all_schedules
 
 
+def _format_gantt_axis_date(dt: datetime) -> str:
+    """Return compact M/D labels for the Gantt X-axis without leading zeros."""
+    return f"{dt.month}/{dt.day}"
+
+
 def _build_gantt_axis_ticks(window_start: datetime, window_end: datetime) -> str:
     ticks: list[str] = []
     total_days = max((window_end - window_start).days, 1)
@@ -1584,7 +1589,7 @@ def _build_gantt_axis_ticks(window_start: datetime, window_end: datetime) -> str
     cursor = window_start
     while cursor <= window_end:
         left = _date_pct(cursor, window_start, window_end)
-        label = cursor.strftime("%m-%d")
+        label = _format_gantt_axis_date(cursor)
         ticks.append(f"<div class='gantt-tick' style='left:{left:.3f}%;'><span>{html.escape(label)}</span></div>")
         cursor += timedelta(days=step_days)
     return "".join(ticks)
@@ -1646,11 +1651,14 @@ def _build_gantt_html(rows: list[dict[str, Any]], window_start: datetime, window
         <div class='gantt-layout'>
             <div class='gantt-chart-scroll' aria-label='Responsive CCx and HCx Gantt chart'>
                 <div class='gantt-chart-panel'>
-                    <div class='gantt-axis'>
+                    <div class='gantt-axis gantt-axis-top'>
                         <div class='gantt-axis-track'>{axis_ticks}<div class='gantt-today-axis' style='left:{today_left:.3f}%;'><span>Today</span></div></div>
                     </div>
                     <div class='gantt-rows'>
                         {''.join(row_html)}
+                    </div>
+                    <div class='gantt-axis gantt-axis-bottom' aria-label='Bottom Gantt date axis'>
+                        <div class='gantt-axis-track'>{axis_ticks}<div class='gantt-today-axis' style='left:{today_left:.3f}%;'><span>Today</span></div></div>
                     </div>
                 </div>
             </div>
@@ -2044,7 +2052,12 @@ def render_floating_task_selector_css() -> None:
             display: grid;
             grid-template-columns: {GANTT_ROW_LABEL_WIDTH_PX}px minmax(0, 1fr);
             min-height: 42px;
+        }}
+        .gantt-axis-top {{
             margin-bottom: 0.15rem;
+        }}
+        .gantt-axis-bottom {{
+            margin-top: 0.15rem;
         }}
         .gantt-axis::before {{
             content: 'Location';
@@ -2054,23 +2067,35 @@ def render_floating_task_selector_css() -> None:
             align-self: end;
             padding: 0 0.5rem 0.35rem 0;
         }}
+        .gantt-axis-bottom::before {{
+            content: '';
+        }}
         .gantt-axis-track {{
             position: relative;
-            border-bottom: 1px solid #94a3b8;
             min-height: 42px;
             background: #ffffff;
             min-width: 0;
         }}
+        .gantt-axis-top .gantt-axis-track {{
+            border-bottom: 1px solid #94a3b8;
+        }}
+        .gantt-axis-bottom .gantt-axis-track {{
+            border-top: 1px solid #94a3b8;
+        }}
         .gantt-tick {{
             position: absolute;
-            bottom: 0;
             height: 0.55rem;
             border-left: 1px solid #cbd5e1;
             transform: translateX(-0.5px);
         }}
+        .gantt-axis-top .gantt-tick {{
+            bottom: 0;
+        }}
+        .gantt-axis-bottom .gantt-tick {{
+            top: 0;
+        }}
         .gantt-tick span {{
             position: absolute;
-            bottom: 0.72rem;
             transform: translateX(-50%);
             color: #111827;
             background: rgba(255,255,255,0.92);
@@ -2080,6 +2105,12 @@ def render_floating_task_selector_css() -> None:
             font-weight: 800;
             white-space: nowrap;
             min-width: max-content;
+        }}
+        .gantt-axis-top .gantt-tick span {{
+            bottom: 0.72rem;
+        }}
+        .gantt-axis-bottom .gantt-tick span {{
+            top: 0.72rem;
         }}
         .gantt-today-axis {{
             position: absolute;
@@ -2102,6 +2133,10 @@ def render_floating_task_selector_css() -> None:
             white-space: nowrap;
             min-width: max-content;
             box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+        }}
+        .gantt-axis-bottom .gantt-today-axis span {{
+            top: auto;
+            bottom: 0;
         }}
         .gantt-row {{
             display: grid;
