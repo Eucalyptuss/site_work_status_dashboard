@@ -1,4 +1,4 @@
-﻿location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,updated_date,나비 볼 밸브,배선 분리,솔 밸브 오링,워터 펌프 누수 점검,F/W Update,Chiller#1 F/W Version,Chiller#2 F/W Version,HVAC F/W Version,CC Start,HC Start,Version,QTY,Note
+﻿location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,updated_date,나비 볼 밸브,배선 분리,솔 밸브 오링,워터 펌프 누수 점검,F/W Update,Chiller#1 F/W Version,Chiller#2 F/W Version,HVAC F/W Version,CCx Start,HCx Start,Version,QTY,Note
 FL001,KAYAK,US,FL,Holt,30.6979877,-86.70955599,America/Chicago,Y,2026-05-09,N/A,N/A,N/A,N/A,15/66,1.1.01_(15/66),1.1.01_(15/66),1.1.01_(15/66),Commercial operation,Commercial operation,1.0 ,66,F/W update 추가 진행 예정
 FL002,CHIPOLA RIVER,US,FL,Altha,30.44839151,-85.2846281,America/Chicago,Y,2026-05-09,N/A,N/A,N/A,N/A,66/66,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 ,66,-
 FL003,FOURMILE,US,FL,Altha,30.44839153,-85.2846281,America/Chicago,Y,2026-05-09,N/A,N/A,N/A,N/A,66/66,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1.0 ,66,-

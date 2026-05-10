@@ -7,5 +7,7 @@ F/W Update,Y,Active Work,50,Free text notes; excluded from KPI completion counts
 Chiller#1 F/W Version,Y,Information,60,Firmware version information
 Chiller#2 F/W Version,Y,Information,70,Firmware version information
 HVAC F/W Version,Y,Information,80,Firmware version information
-CC Start,Y,Information,90,Cold Commissionting Start Date
-HC Start,Y,Information,100,Hot Commissionting Start Date
+CCx Start,Y,Information,90,Cold Commissionting Start Date
+HCx Start,Y,Information,100,Hot Commissionting Start Date
+QTY,Y,Information,980,Number of EQP
+Note,Y,Information,990,Text note

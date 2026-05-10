@@ -5,7 +5,7 @@ import html
 import io
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -46,12 +46,32 @@ VALID_TRUE = {"y", "yes", "true", "1"}
 VALID_FALSE = {"n", "no", "false", "0"}
 PROGRESS_RE = re.compile(r"^\s*([+-]?\d+(?:\.\d+)?)\s*/\s*([+-]?\d+(?:\.\d+)?)\s*$")
 DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
-SITE_METADATA_COLUMNS = {"version", "updated_date", "qty", "note"}
+SITE_METADATA_COLUMNS = {"version", "updated_date"}
 UPDATED_DATE_COLUMN_NAME = "updated_date"
 UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-dashboard_ver = "v1.10"
+dashboard_ver = "v1.20"
 DEFAULT_TASK_CONFIG_FILENAME = "task_config.csv"
 TASK_CONFIG_COLUMNS = ["task_name", "visible", "category", "display_order", "description"]
+
+CC_START_COLUMN_NAME = "CCx Start"
+HC_START_COLUMN_NAME = "HCx Start"
+GANTT_TABLE_HIDE_BREAKPOINT_PX = 1100
+GANTT_LOOKBACK_DAYS = 7
+GANTT_LOOKAHEAD_MONTHS = 1
+GANTT_PHASE_BAR_DAYS = 14
+GANTT_SHOW_ALL_END_PADDING_DAYS = 7
+GANTT_COMPLETED_HIDE_AFTER_DAYS = 14
+GANTT_CC_COLOR = "#2563eb"
+GANTT_HC_COLOR = "#dc2626"
+GANTT_TODAY_COLOR = "#f59e0b"
+GANTT_COMMERCIAL_COLOR = "#facc15"
+GANTT_COMMERCIAL_OPERATION_LABEL = "Commercial Operation"
+GANTT_CCx_ACTIVE_KPI_COLOR = "#bae6fd"
+GANTT_HCx_ACTIVE_KPI_COLOR = "#fbcfe8"
+GANTT_MIN_CHART_WIDTH_PX = 0
+GANTT_ROW_LABEL_WIDTH_PX = 190
+GANTT_MOBILE_ROW_LABEL_WIDTH_PX = 165
+GANTT_TABLE_HIDE_ASPECT_RATIO = "1/1"
 
 STATUS_COLORS = {
     "green": "#2e7d32",
@@ -271,6 +291,34 @@ def _validate_updated_date_metadata(
         )
 
 
+
+def _validate_schedule_date_metadata(
+    working: pd.DataFrame,
+    enabled_working: pd.DataFrame,
+    issues: list[dict[str, Any]],
+) -> None:
+    for schedule_column in (CC_START_COLUMN_NAME, HC_START_COLUMN_NAME):
+        actual_col = _get_schedule_column_name(working.columns, schedule_column)
+        if actual_col is None:
+            continue
+        for idx, row in enabled_working.iterrows():
+            raw_value = row.get(actual_col, "")
+            text = str(raw_value).strip()
+            if not text or text.lower() in NA_VALUES or text in DASH_PLACEHOLDERS:
+                continue
+            if _is_commercial_operation_value(text):
+                continue
+            if _parse_schedule_date(text) is None:
+                _add_issue(
+                    issues,
+                    int(idx),
+                    row.get("location_id", ""),
+                    actual_col,
+                    raw_value,
+                    f"{actual_col} is not a valid schedule date. Use YYYY-MM-DD when possible.",
+                    "WARNING",
+                )
+
 def _normalize_task_config_visible(value: Any) -> bool:
     if value is None or pd.isna(value):
         return True
@@ -436,6 +484,11 @@ def is_note_column(column_name: str) -> bool:
     return str(column_name).strip().lower() == "note"
 
 
+def is_schedule_column(column_name: str) -> bool:
+    normalized = str(column_name).strip().lower()
+    return normalized in {CC_START_COLUMN_NAME.lower(), HC_START_COLUMN_NAME.lower()}
+
+
 def normalize_enabled(value: Any) -> bool | None:
     if value is None:
         return None
@@ -503,6 +556,7 @@ def validate_dataframe(
     enabled_working = working[working["_enabled_bool"] == True].copy()  # noqa: E712
 
     _validate_updated_date_metadata(working, enabled_working, issues)
+    _validate_schedule_date_metadata(working, enabled_working, issues)
 
     for idx, row in enabled_working.iterrows():
         location_id = row.get("location_id", "")
@@ -753,10 +807,13 @@ def parse_status_value(value: Any) -> dict[str, Any]:
 
 
 def parse_task_status_value(task_name: str, value: Any) -> dict[str, Any]:
-    if is_note_column(task_name):
+    if is_note_column(task_name) or is_schedule_column(task_name):
         raw_value = value
         if value is None or pd.isna(value):
             display_text = ""
+        elif is_schedule_column(task_name):
+            parsed_date = _parse_schedule_date(value) if "_parse_schedule_date" in globals() else None
+            display_text = parsed_date.strftime("%Y-%m-%d") if parsed_date else str(value).strip()
         else:
             display_text = str(value).strip()
         return {
@@ -889,14 +946,19 @@ def _version_sort_key(version: str) -> tuple[Any, ...]:
     return (1, lowered)
 
 
-def _sort_site_names(site_names: list[str]) -> list[str]:
-    return sorted(site_names, key=lambda name: (str(name).casefold(), str(name)))
+def _sort_site_entries(site_entries: list[Any]) -> list[Any]:
+    def entry_name(entry: Any) -> str:
+        if isinstance(entry, dict):
+            return str(entry.get("name", ""))
+        return str(entry)
+
+    return sorted(site_entries, key=lambda entry: (entry_name(entry).casefold(), entry_name(entry)))
 
 
-def _sort_sites_by_version(version_map: dict[str, list[str]]) -> dict[str, list[str]]:
-    sorted_map: dict[str, list[str]] = {}
+def _sort_sites_by_version(version_map: dict[str, list[Any]]) -> dict[str, list[Any]]:
+    sorted_map: dict[str, list[Any]] = {}
     for version in sorted(version_map.keys(), key=_version_sort_key):
-        sorted_map[version] = _sort_site_names(version_map[version])
+        sorted_map[version] = _sort_site_entries(version_map[version])
     return sorted_map
 
 
@@ -919,7 +981,7 @@ def get_version_filter_options(df: pd.DataFrame) -> list[str]:
 
 
 def is_kpi_calculation_task(task_name: str) -> bool:
-    return not is_note_column(task_name) and not is_site_metadata_column(task_name)
+    return not is_note_column(task_name) and not is_site_metadata_column(task_name) and not is_schedule_column(task_name)
 
 
 def calculate_kpis(
@@ -929,8 +991,8 @@ def calculate_kpis(
     validation_issues: list[dict[str, Any]],
 ) -> dict[str, Any]:
     displayed_sites = len(filtered_df)
-    complete_sites_by_version: dict[str, list[str]] = {}
-    incomplete_sites_by_version: dict[str, list[str]] = {}
+    complete_sites_by_version: dict[str, list[Any]] = {}
+    incomplete_sites_by_version: dict[str, list[Any]] = {}
 
     kpi_task_columns = [task for task in selected_task_columns if is_kpi_calculation_task(task)]
 
@@ -938,6 +1000,7 @@ def calculate_kpis(
         parsed = parse_all_task_statuses(row, kpi_task_columns)
         site_name = _get_site_display_name(row)
         version = _get_site_version(row)
+        site_entry = {"name": site_name, "schedule_phase": get_current_schedule_phase(row)}
 
         kpi_scope_parsed = {
             task: status
@@ -949,7 +1012,7 @@ def calculate_kpis(
             status["type"] == "not_applicable" for status in kpi_scope_parsed.values()
         )
         if all_kpi_scope_items_are_not_applicable:
-            complete_sites_by_version.setdefault(version, []).append(site_name)
+            complete_sites_by_version.setdefault(version, []).append(site_entry)
             continue
 
         applicable_parsed = {
@@ -966,9 +1029,9 @@ def calculate_kpis(
         has_all_numeric_100 = bool(progress_items) and all((p["percent"] or 0) >= 100 for p in progress_items)
 
         if has_all_numeric_100 and not has_dash_placeholder and not has_invalid_progress:
-            complete_sites_by_version.setdefault(version, []).append(site_name)
+            complete_sites_by_version.setdefault(version, []).append(site_entry)
         if has_numeric_below_100 or has_dash_placeholder or has_invalid_progress:
-            incomplete_sites_by_version.setdefault(version, []).append(site_name)
+            incomplete_sites_by_version.setdefault(version, []).append(site_entry)
 
     complete_sites_by_version = _sort_sites_by_version(complete_sites_by_version)
     incomplete_sites_by_version = _sort_sites_by_version(incomplete_sites_by_version)
@@ -1301,6 +1364,322 @@ def render_map(
         st.session_state.selected_site_id = clicked_site_id
 
 
+
+
+# -----------------------------------------------------------------------------
+# Gantt schedule rendering
+# -----------------------------------------------------------------------------
+def _get_schedule_column_name(columns: Any, target_name: str) -> str | None:
+    return _find_case_insensitive_column(columns, target_name)
+
+
+def _is_commercial_operation_value(value: Any) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    return str(value).strip().casefold() == GANTT_COMMERCIAL_OPERATION_LABEL.casefold()
+
+
+def _parse_schedule_date(value: Any) -> datetime | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in NA_VALUES or text in DASH_PLACEHOLDERS:
+        return None
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.to_pydatetime().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _format_schedule_date(value: Any) -> str:
+    if _is_commercial_operation_value(value):
+        return GANTT_COMMERCIAL_OPERATION_LABEL
+    parsed = _parse_schedule_date(value)
+    return parsed.strftime("%Y-%m-%d") if parsed else "—"
+
+
+def _add_months(dt: datetime, months: int) -> datetime:
+    month = dt.month - 1 + months
+    year = dt.year + month // 12
+    month = month % 12 + 1
+    days_in_month = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    day = min(dt.day, days_in_month[month - 1])
+    return dt.replace(year=year, month=month, day=day)
+
+
+def _date_pct(dt: datetime, window_start: datetime, window_end: datetime) -> float:
+    total_seconds = max((window_end - window_start).total_seconds(), 1)
+    return max(0.0, min(100.0, (dt - window_start).total_seconds() / total_seconds * 100.0))
+
+
+def _get_schedule_events_for_row(row: pd.Series) -> list[dict[str, Any]]:
+    cc_col = _get_schedule_column_name(row.index, CC_START_COLUMN_NAME)
+    hc_col = _get_schedule_column_name(row.index, HC_START_COLUMN_NAME)
+    cc_date = _parse_schedule_date(row.get(cc_col, "")) if cc_col is not None else None
+    hc_date = _parse_schedule_date(row.get(hc_col, "")) if hc_col is not None else None
+    events: list[dict[str, Any]] = []
+    if cc_date is not None:
+        events.append({"type": "CC", "start": cc_date, "color": GANTT_CC_COLOR})
+    if hc_date is not None:
+        events.append({"type": "HC", "start": hc_date, "color": GANTT_HC_COLOR})
+    events.sort(key=lambda item: (item["start"], 0 if item["type"] == "CC" else 1))
+    return events
+
+
+def _row_has_commercial_operation(row: pd.Series) -> bool:
+    cc_col = _get_schedule_column_name(row.index, CC_START_COLUMN_NAME)
+    hc_col = _get_schedule_column_name(row.index, HC_START_COLUMN_NAME)
+    return any(
+        _is_commercial_operation_value(row.get(col, ""))
+        for col in (cc_col, hc_col)
+        if col is not None
+    )
+
+
+def _build_schedule_segments_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    segments: list[dict[str, Any]] = []
+    for idx, event in enumerate(events):
+        start = event["start"]
+        planned_end = start + timedelta(days=GANTT_PHASE_BAR_DAYS)
+        next_start = events[idx + 1]["start"] if idx + 1 < len(events) else None
+        end = min(planned_end, next_start) if next_start and next_start > start else planned_end
+        segments.append({"type": event["type"], "start": start, "end": end, "color": event["color"]})
+    return segments
+
+
+def get_current_schedule_phase(row: pd.Series, today: datetime | None = None) -> str | None:
+    today = today or datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    if _row_has_commercial_operation(row):
+        return GANTT_COMMERCIAL_OPERATION_LABEL
+    for segment in _build_schedule_segments_from_events(_get_schedule_events_for_row(row)):
+        if segment["start"] <= today < segment["end"]:
+            return str(segment["type"])
+    return None
+
+
+def _default_gantt_window(today: datetime) -> tuple[datetime, datetime]:
+    return today - timedelta(days=GANTT_LOOKBACK_DAYS), _add_months(today, GANTT_LOOKAHEAD_MONTHS)
+
+
+def _all_schedule_window(df: pd.DataFrame, today: datetime) -> tuple[datetime, datetime]:
+    all_dates: list[datetime] = []
+    for _, row in df.iterrows():
+        for event in _get_schedule_events_for_row(row):
+            all_dates.append(event["start"])
+    if not all_dates:
+        return _default_gantt_window(today)
+    window_start = min(all_dates)
+    window_end = max(all_dates) + timedelta(days=GANTT_SHOW_ALL_END_PADDING_DAYS)
+    if window_end <= window_start:
+        window_end = window_start + timedelta(days=GANTT_SHOW_ALL_END_PADDING_DAYS)
+    return window_start, window_end
+
+
+def _build_gantt_rows(
+    df: pd.DataFrame,
+    include_all_schedules: bool,
+) -> tuple[list[dict[str, Any]], datetime, datetime, datetime, bool]:
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    cc_col = _get_schedule_column_name(df.columns, CC_START_COLUMN_NAME)
+    hc_col = _get_schedule_column_name(df.columns, HC_START_COLUMN_NAME)
+    if cc_col is None and hc_col is None:
+        window_start, window_end = _default_gantt_window(today)
+        return [], window_start, window_end, today, False
+
+    window_start, window_end = _all_schedule_window(df, today) if include_all_schedules else _default_gantt_window(today)
+
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        location_name = _get_site_display_name(row)
+        location_id = str(row.get("location_id", "")).strip()
+        cc_raw = row.get(cc_col, "") if cc_col is not None else ""
+        hc_raw = row.get(hc_col, "") if hc_col is not None else ""
+        cc_date = _parse_schedule_date(cc_raw) if cc_col is not None else None
+        hc_date = _parse_schedule_date(hc_raw) if hc_col is not None else None
+        raw_events = _get_schedule_events_for_row(row)
+        is_commercial = _row_has_commercial_operation(row)
+
+        segments: list[dict[str, Any]] = []
+        if is_commercial:
+            if not include_all_schedules:
+                continue
+            segments.append(
+                {
+                    "type": GANTT_COMMERCIAL_OPERATION_LABEL,
+                    "start": window_start,
+                    "end": window_end,
+                    "visible_start": window_start,
+                    "visible_end": window_end,
+                    "color": GANTT_COMMERCIAL_COLOR,
+                    "left": 0.0,
+                    "width": 100.0,
+                    "row_top": "19px",
+                }
+            )
+            sort_date = min([event["start"] for event in raw_events], default=window_end + timedelta(days=1))
+        else:
+            raw_segments = _build_schedule_segments_from_events(raw_events)
+            for segment in raw_segments:
+                start = segment["start"]
+                end = segment["end"]
+                if not include_all_schedules and start + timedelta(days=GANTT_COMPLETED_HIDE_AFTER_DAYS) < today:
+                    continue
+                visible_start = max(start, window_start)
+                visible_end = min(end, window_end)
+                if visible_end <= window_start or visible_start >= window_end or visible_end <= visible_start:
+                    continue
+                segments.append(
+                    {
+                        "type": segment["type"],
+                        "start": start,
+                        "end": end,
+                        "visible_start": visible_start,
+                        "visible_end": visible_end,
+                        "color": segment["color"],
+                        "left": _date_pct(visible_start, window_start, window_end),
+                        "width": max(0.5, _date_pct(visible_end, window_start, window_end) - _date_pct(visible_start, window_start, window_end)),
+                        "row_top": "8px" if segment["type"] == "CC" else "31px",
+                    }
+                )
+            if not segments:
+                continue
+            sort_date = min(segment["start"] for segment in segments)
+
+        rows.append(
+            {
+                "location_name": location_name,
+                "location_id": location_id,
+                "cc_start": cc_date,
+                "hc_start": hc_date,
+                "cc_display": _format_schedule_date(cc_raw),
+                "hc_display": _format_schedule_date(hc_raw),
+                "segments": segments,
+                "sort_date": sort_date,
+                "is_commercial_operation": is_commercial,
+            }
+        )
+
+    rows.sort(
+        key=lambda item: (
+            1 if item.get("is_commercial_operation") else 0,
+            item["sort_date"],
+            str(item["location_name"]).casefold(),
+            str(item["location_id"]),
+        )
+    )
+    return rows, window_start, window_end, today, include_all_schedules
+
+
+def _build_gantt_axis_ticks(window_start: datetime, window_end: datetime) -> str:
+    ticks: list[str] = []
+    total_days = max((window_end - window_start).days, 1)
+    if total_days <= 21:
+        step_days = 2
+    elif total_days <= 75:
+        step_days = 7
+    elif total_days <= 180:
+        step_days = 14
+    else:
+        step_days = 30
+    cursor = window_start
+    while cursor <= window_end:
+        left = _date_pct(cursor, window_start, window_end)
+        label = cursor.strftime("%m-%d")
+        ticks.append(f"<div class='gantt-tick' style='left:{left:.3f}%;'><span>{html.escape(label)}</span></div>")
+        cursor += timedelta(days=step_days)
+    return "".join(ticks)
+
+
+def _build_gantt_html(rows: list[dict[str, Any]], window_start: datetime, window_end: datetime, today: datetime, include_all_schedules: bool) -> str:
+    today_left = _date_pct(today, window_start, window_end)
+    axis_ticks = _build_gantt_axis_ticks(window_start, window_end)
+    row_html: list[str] = []
+    table_rows: list[str] = []
+
+    for item in rows:
+        safe_location = html.escape(str(item["location_name"]))
+        safe_location_id = html.escape(str(item.get("location_id", "")))
+        row_class = "gantt-row gantt-commercial-row" if item.get("is_commercial_operation") else "gantt-row"
+        table_row_class = "gantt-table-row gantt-commercial-table-row" if item.get("is_commercial_operation") else "gantt-table-row"
+        bars = []
+        for segment in item["segments"]:
+            segment_type = str(segment["type"])
+            is_commercial_segment = segment_type == GANTT_COMMERCIAL_OPERATION_LABEL
+            bar_class = "gantt-bar-commercial" if is_commercial_segment else f"gantt-bar-{segment_type.lower()}"
+            tooltip = f"{item['location_name']} · {segment_type} · {segment['start'].strftime('%Y-%m-%d')} to {segment['end'].strftime('%Y-%m-%d')}"
+            label = GANTT_COMMERCIAL_OPERATION_LABEL if is_commercial_segment else segment_type
+            bars.append(
+                "<div "
+                f"class='gantt-bar {bar_class}' "
+                f"title='{html.escape(tooltip)}' "
+                f"style='left:{segment['left']:.3f}%; width:{segment['width']:.3f}%; top:{segment['row_top']}; background:{html.escape(segment['color'])};'>"
+                f"<span>{html.escape(label)}</span>"
+                "</div>"
+            )
+        row_html.append(
+            f"<div class='{row_class}'>"
+            f"<div class='gantt-location-label' title='{safe_location_id}'>{safe_location}</div>"
+            "<div class='gantt-track'>"
+            f"<div class='gantt-today-line' style='left:{today_left:.3f}%;'></div>"
+            f"{''.join(bars)}"
+            "</div>"
+            "</div>"
+        )
+        table_rows.append(
+            f"<div class='{table_row_class}'>"
+            f"<div class='gantt-table-cell gantt-table-location'>{safe_location}</div>"
+            f"<div class='gantt-table-cell'>{html.escape(str(item.get('cc_display', '—') or '—'))}</div>"
+            f"<div class='gantt-table-cell'>{html.escape(str(item.get('hc_display', '—') or '—'))}</div>"
+            "</div>"
+        )
+
+    return f"""
+    <div class='gantt-container'>
+        <div class='gantt-legend-row'>
+            <span class='gantt-window-label'>Window: {html.escape(window_start.strftime('%Y-%m-%d'))} to {html.escape(window_end.strftime('%Y-%m-%d'))}</span>
+            <span class='gantt-legend-item'><span class='gantt-legend-dot gantt-legend-cc'></span>CC</span>
+            <span class='gantt-legend-item'><span class='gantt-legend-dot gantt-legend-hc'></span>HC</span>
+            <span class='gantt-legend-item'><span class='gantt-legend-dot gantt-legend-co'></span>Commercial Operation</span>
+        </div>
+        <div class='gantt-layout'>
+            <div class='gantt-chart-scroll' aria-label='Responsive CC and HC Gantt chart'>
+                <div class='gantt-chart-panel'>
+                    <div class='gantt-axis'>
+                        <div class='gantt-axis-track'>{axis_ticks}<div class='gantt-today-axis' style='left:{today_left:.3f}%;'><span>Today</span></div></div>
+                    </div>
+                    <div class='gantt-rows'>
+                        {''.join(row_html)}
+                    </div>
+                </div>
+            </div>
+            <div class='gantt-table-panel'>
+                <div class='gantt-table'>
+                    <div class='gantt-table-header'><div>Location</div><div>CCx Start</div><div>HC Start</div></div>
+                    <div class='gantt-table-body'>{''.join(table_rows)}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    """
+
+
+def render_gantt_chart_section(df: pd.DataFrame) -> None:
+    include_all = st.checkbox(
+        "Show All CCx/HCx Schedules",
+        value=False,
+        key="gantt_show_all_schedules",
+    )
+    rows, window_start, window_end, today, include_all_schedules = _build_gantt_rows(df, include_all_schedules=include_all)
+    if not rows:
+        cc_col = _get_schedule_column_name(df.columns, CC_START_COLUMN_NAME)
+        hc_col = _get_schedule_column_name(df.columns, HC_START_COLUMN_NAME)
+        if cc_col is None and hc_col is None:
+            st.info("No `CCx Start` or `HC Start` columns were found in the active CSV.")
+        else:
+            st.info("No CCx/HCx schedule rows fall within the current Gantt display window.")
+        return
+    render_safe_html(_build_gantt_html(rows, window_start, window_end, today, include_all_schedules))
+
 # -----------------------------------------------------------------------------
 # UI rendering
 # -----------------------------------------------------------------------------
@@ -1402,6 +1781,16 @@ def render_floating_task_selector_css() -> None:
             font-weight: 700;
             padding: 0.14rem 0.45rem;
             line-height: 1.22;
+        }
+        .kpi-site-pill-cc-active {
+            background: #bae6fd !important;
+            border-color: #38bdf8 !important;
+            color: #0f172a !important;
+        }
+        .kpi-site-pill-hc-active {
+            background: #fbcfe8 !important;
+            border-color: #f472b6 !important;
+            color: #0f172a !important;
         }
         .kpi-empty-sites {
             color: #6b7280;
@@ -1578,6 +1967,273 @@ def render_floating_task_selector_css() -> None:
                 align-items: flex-start;
             }
         }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <style>
+        div[data-testid="stExpander"] summary p,
+        div[data-testid="stExpander"] summary span {{
+            font-size: 1.35rem !important;
+            font-weight: 800 !important;
+            line-height: 1.35 !important;
+        }}
+        .gantt-container {{
+            background: #ffffff;
+            color: #111827;
+            border: 1px solid #9ca3af;
+            border-radius: 0.9rem;
+            padding: 0.95rem;
+            overflow: hidden;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.16);
+        }}
+        .gantt-container * {{
+            box-sizing: border-box;
+        }}
+        .gantt-legend-row {{
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+            color: #111827;
+            font-size: 0.88rem;
+            font-weight: 800;
+        }}
+        .gantt-window-label {{
+            margin-right: auto;
+            color: #111827;
+        }}
+        .gantt-legend-item {{ display: inline-flex; align-items: center; gap: 0.3rem; color:#111827; }}
+        .gantt-legend-dot {{ width: 0.75rem; height: 0.75rem; border-radius: 999px; display: inline-block; border:1px solid rgba(17,24,39,0.25); }}
+        .gantt-legend-cc {{ background: {GANTT_CC_COLOR}; }}
+        .gantt-legend-hc {{ background: {GANTT_HC_COLOR}; }}
+        .gantt-legend-co {{ background: {GANTT_COMMERCIAL_COLOR}; }}
+        .gantt-layout {{
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(250px, 0.28fr);
+            gap: 0.8rem;
+            align-items: stretch;
+        }}
+        .gantt-chart-scroll {{
+            overflow: hidden;
+            border: 1px solid rgba(148,163,184,0.45);
+            border-radius: 0.65rem;
+            background: #ffffff;
+            min-width: 0;
+            height: 100%;
+        }}
+        .gantt-chart-panel {{
+            width: 100%;
+            min-width: 0;
+            padding: 0.15rem 0.25rem 0.25rem 0.25rem;
+        }}
+        .gantt-axis {{
+            display: grid;
+            grid-template-columns: {GANTT_ROW_LABEL_WIDTH_PX}px minmax(0, 1fr);
+            min-height: 42px;
+            margin-bottom: 0.15rem;
+        }}
+        .gantt-axis::before {{
+            content: 'Location';
+            color: #111827;
+            font-size: 0.78rem;
+            font-weight: 900;
+            align-self: end;
+            padding: 0 0.5rem 0.35rem 0;
+        }}
+        .gantt-axis-track {{
+            position: relative;
+            border-bottom: 1px solid #94a3b8;
+            min-height: 42px;
+            background: #ffffff;
+            min-width: 0;
+        }}
+        .gantt-tick {{
+            position: absolute;
+            bottom: 0;
+            height: 0.55rem;
+            border-left: 1px solid #cbd5e1;
+            transform: translateX(-0.5px);
+        }}
+        .gantt-tick span {{
+            position: absolute;
+            bottom: 0.72rem;
+            transform: translateX(-50%);
+            color: #111827;
+            background: rgba(255,255,255,0.92);
+            border-radius: 0.2rem;
+            padding: 0 0.12rem;
+            font-size: 0.70rem;
+            font-weight: 800;
+            white-space: nowrap;
+            min-width: max-content;
+        }}
+        .gantt-today-axis {{
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            border-left: 3px solid {GANTT_TODAY_COLOR};
+            z-index: 10;
+            pointer-events: none;
+        }}
+        .gantt-today-axis span {{
+            position: absolute;
+            top: 0;
+            transform: translateX(-50%);
+            background: {GANTT_TODAY_COLOR};
+            color: #111827;
+            border-radius: 999px;
+            padding: 0.08rem 0.45rem;
+            font-size: 0.72rem;
+            font-weight: 900;
+            white-space: nowrap;
+            min-width: max-content;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+        }}
+        .gantt-row {{
+            display: grid;
+            grid-template-columns: {GANTT_ROW_LABEL_WIDTH_PX}px minmax(0, 1fr);
+            min-height: 60px;
+            height: 60px;
+            border-bottom: 1px solid #e2e8f0;
+            background: #ffffff;
+        }}
+        .gantt-row:nth-child(even) {{ background: #f8fafc; }}
+        .gantt-commercial-row {{ background: #fffbeb !important; }}
+        .gantt-location-label {{
+            color: #111827;
+            font-size: 0.78rem;
+            font-weight: 900;
+            line-height: 1.15;
+            padding: 0.45rem 0.5rem 0.45rem 0.25rem;
+            overflow-wrap: anywhere;
+            word-break: normal;
+            background: inherit;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            text-align: left;
+            min-width: 0;
+        }}
+        .gantt-track {{
+            position: relative;
+            min-height: 60px;
+            background: linear-gradient(to right, #f8fafc, #ffffff);
+            overflow: hidden;
+            min-width: 0;
+        }}
+        .gantt-today-line {{
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            border-left: 3px solid {GANTT_TODAY_COLOR};
+            z-index: 4;
+            pointer-events: none;
+        }}
+        .gantt-bar {{
+            position: absolute;
+            height: 20px;
+            min-width: 11px;
+            border-radius: 999px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.28);
+            color: #ffffff;
+            font-size: 0.68rem;
+            font-weight: 900;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            white-space: nowrap;
+            border: 1px solid rgba(255,255,255,0.85);
+            z-index: 3;
+        }}
+        .gantt-bar span {{
+            min-width: max-content;
+            padding: 0 0.22rem;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.45);
+        }}
+        .gantt-bar-commercial {{
+            color:#111827 !important;
+            border-color: rgba(17,24,39,0.25);
+        }}
+        .gantt-bar-commercial span {{
+            color:#111827 !important;
+            text-shadow: none;
+        }}
+        .gantt-table-panel {{
+            display: block;
+            background:#ffffff;
+            color:#111827;
+            height: 100%;
+            overflow: hidden;
+            border: 1px solid rgba(148,163,184,0.45);
+            border-radius: 0.65rem;
+            min-width: 0;
+        }}
+        .gantt-table {{
+            width: 100%;
+            color: #111827;
+            font-size: 0.78rem;
+            background:#ffffff;
+        }}
+        .gantt-table-header {{
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+            min-height: 42px;
+            align-items: end;
+            border-bottom: 1px solid #94a3b8;
+            background:#f1f5f9;
+            color:#111827;
+            font-weight: 900;
+        }}
+        .gantt-table-header > div {{
+            padding: 0 0.35rem 0.35rem 0.35rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .gantt-table-body {{
+            width: 100%;
+        }}
+        .gantt-table-row {{
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+            min-height: 60px;
+            height: 60px;
+            border-bottom: 1px solid #e2e8f0;
+            background:#ffffff;
+            color:#111827;
+            align-items: center;
+        }}
+        .gantt-table-row:nth-child(even) {{ background:#f8fafc; }}
+        .gantt-table-cell {{
+            padding: 0.35rem;
+            color:#111827;
+            overflow-wrap: anywhere;
+            font-weight: 700;
+            line-height: 1.2;
+        }}
+        .gantt-table-location {{ font-weight: 900; }}
+        .gantt-commercial-table-row {{
+            background:#fffbeb !important;
+            color:#111827;
+            font-weight:900;
+        }}
+        @media (max-width: {GANTT_TABLE_HIDE_BREAKPOINT_PX}px), (max-aspect-ratio: {GANTT_TABLE_HIDE_ASPECT_RATIO}) {{
+            .gantt-layout {{ grid-template-columns: minmax(0, 1fr); }}
+            .gantt-table-panel {{ display: none; }}
+        }}
+        @media (max-width: 720px) {{
+            .gantt-axis, .gantt-row {{
+                grid-template-columns: minmax({GANTT_MOBILE_ROW_LABEL_WIDTH_PX}px, 42%) minmax(0, 1fr);
+            }}
+            .gantt-location-label {{ font-size:0.74rem; }}
+            .gantt-tick span {{ font-size: 0.66rem; }}
+            .gantt-bar {{ font-size:0.66rem; min-width: 12px; }}
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -1763,7 +2419,6 @@ def render_safe_html(html_content: str) -> None:
 
 
 def render_dashboard_meta_header(source_name: str, updated_date: str, total_sites: int) -> None:
-    """Render the dashboard meta header in four equal-width areas."""
     safe_source_name = html.escape(str(source_name))
     safe_updated_date = html.escape(str(updated_date))
     safe_total_sites = html.escape(str(total_sites))
@@ -1791,10 +2446,32 @@ def render_dashboard_meta_header(source_name: str, updated_date: str, total_site
     )
 
 
+def _kpi_site_pill_html(site_entry: Any) -> str:
+    if isinstance(site_entry, dict):
+        site_name = str(site_entry.get("name", ""))
+        phase = str(site_entry.get("schedule_phase", "") or "")
+    else:
+        site_name = str(site_entry)
+        phase = ""
+
+    extra_class = ""
+    title_suffix = ""
+    if phase == "CC":
+        extra_class = " kpi-site-pill-cc-active"
+        title_suffix = " · Active CC schedule"
+    elif phase == "HC":
+        extra_class = " kpi-site-pill-hc-active"
+        title_suffix = " · Active HC schedule"
+
+    safe_site_name = html.escape(site_name)
+    safe_title = html.escape(site_name + title_suffix)
+    return f"<span class='kpi-site-pill{extra_class}' title='{safe_title}'>{safe_site_name}</span>"
+
+
 def _kpi_card_html(
     title: str,
     count: Any,
-    sites_by_version: dict[str, list[str]] | None = None,
+    sites_by_version: dict[str, list[Any]] | None = None,
 ) -> str:
     safe_title = html.escape(str(title))
     safe_count = html.escape(str(count))
@@ -1806,10 +2483,7 @@ def _kpi_card_html(
             for version, site_names in sites_by_version.items():
                 safe_version = html.escape(str(version))
                 safe_version_count = html.escape(str(len(site_names)))
-                pills = "".join(
-                    f"<span class='kpi-site-pill'>{html.escape(str(name))}</span>"
-                    for name in site_names
-                )
+                pills = "".join(_kpi_site_pill_html(site) for site in site_names)
                 version_groups.append(
                     "<div class='kpi-version-group'>"
                     "<div class='kpi-version-header'>"
@@ -1844,7 +2518,7 @@ def _kpi_count(kpis: dict[str, Any], label: str) -> Any:
     return value
 
 
-def _kpi_sites_by_version(kpis: dict[str, Any], label: str) -> dict[str, list[str]]:
+def _kpi_sites_by_version(kpis: dict[str, Any], label: str) -> dict[str, list[Any]]:
     value = kpis.get(label, {})
     if isinstance(value, dict):
         grouped = value.get("sites_by_version", {})
@@ -2062,15 +2736,20 @@ def main() -> None:
         if not matched.empty:
             selected_site = matched.iloc[0]
 
-    st.divider()
-    render_selected_site_detail(selected_site, task_columns, selected_task_columns)
+    with st.expander("CCx / HCx Schedule", expanded=True):
+        render_gantt_chart_section(filtered_df)
 
-    st.divider()
-    filtered_table = render_data_table(filtered_df, selected_task_columns)
+    with st.expander("Selected Site Detail", expanded=True):
+        render_selected_site_detail(selected_site, task_columns, selected_task_columns)
 
-    st.divider()
-    issue_df = render_data_quality_report(validation_issues)
-    render_download_buttons(filtered_table, issue_df)
+    with st.expander("Data Table", expanded=True):
+        filtered_table = render_data_table(filtered_df, selected_task_columns)
+
+    with st.expander("Data Quality Report", expanded=False):
+        issue_df = render_data_quality_report(validation_issues)
+
+    with st.expander("Export", expanded=False):
+        render_download_buttons(filtered_table, issue_df)
 
 
 if __name__ == "__main__":
