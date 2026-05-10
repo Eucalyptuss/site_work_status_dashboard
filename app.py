@@ -49,7 +49,7 @@ DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
 SITE_METADATA_COLUMNS = {"version", "updated_date"}
 UPDATED_DATE_COLUMN_NAME = "updated_date"
 UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-dashboard_ver = "v1.22"
+dashboard_ver = "v1.23"
 DEFAULT_TASK_CONFIG_FILENAME = "task_config.csv"
 TASK_CONFIG_COLUMNS = ["task_name", "visible", "category", "display_order", "description"]
 
@@ -1575,24 +1575,63 @@ def _format_gantt_axis_date(dt: datetime) -> str:
     return f"{dt.month}/{dt.day}"
 
 
-def _build_gantt_axis_ticks(window_start: datetime, window_end: datetime) -> str:
-    ticks: list[str] = []
-    total_days = max((window_end - window_start).days, 1)
+def _get_gantt_base_tick_step_days(total_days: int) -> int:
+    """Return the default major tick step for a given schedule window."""
     if total_days <= 21:
-        step_days = 2
-    elif total_days <= 75:
-        step_days = 7
-    elif total_days <= 180:
-        step_days = 14
-    else:
-        step_days = 30
+        return 2
+    if total_days <= 75:
+        return 7
+    if total_days <= 180:
+        return 14
+    return 30
+
+
+def _build_gantt_axis_ticks_for_step(
+    window_start: datetime,
+    window_end: datetime,
+    step_days: int,
+    css_class: str,
+) -> str:
+    """Build one responsive tick layer.
+
+    Multiple layers are rendered and CSS chooses the right layer by screen
+    width. This lets the Gantt chart use wider date intervals on narrow
+    screens without requiring JavaScript or a Streamlit rerun.
+    """
+    ticks: list[str] = []
     cursor = window_start
+    step_days = max(int(step_days), 1)
     while cursor <= window_end:
         left = _date_pct(cursor, window_start, window_end)
         label = _format_gantt_axis_date(cursor)
-        ticks.append(f"<div class='gantt-tick' style='left:{left:.3f}%;'><span>{html.escape(label)}</span></div>")
+        ticks.append(
+            f"<div class='gantt-tick {css_class}' style='left:{left:.3f}%;'><span>{html.escape(label)}</span></div>"
+        )
         cursor += timedelta(days=step_days)
+
+    if not ticks or cursor - timedelta(days=step_days) < window_end:
+        left = _date_pct(window_end, window_start, window_end)
+        label = _format_gantt_axis_date(window_end)
+        ticks.append(
+            f"<div class='gantt-tick {css_class} gantt-tick-end' style='left:{left:.3f}%;'><span>{html.escape(label)}</span></div>"
+        )
     return "".join(ticks)
+
+
+def _build_gantt_axis_ticks(window_start: datetime, window_end: datetime) -> str:
+    total_days = max((window_end - window_start).days, 1)
+    base_step = _get_gantt_base_tick_step_days(total_days)
+
+    medium_step = max(base_step * 2, base_step + 1)
+    narrow_step = max(base_step * 3, medium_step + 1)
+
+    return "".join(
+        [
+            _build_gantt_axis_ticks_for_step(window_start, window_end, base_step, "gantt-tick-wide"),
+            _build_gantt_axis_ticks_for_step(window_start, window_end, medium_step, "gantt-tick-medium"),
+            _build_gantt_axis_ticks_for_step(window_start, window_end, narrow_step, "gantt-tick-narrow"),
+        ]
+    )
 
 
 def _build_gantt_html(rows: list[dict[str, Any]], window_start: datetime, window_end: datetime, today: datetime, include_all_schedules: bool) -> str:
@@ -2088,6 +2127,13 @@ def render_floating_task_selector_css() -> None:
             border-left: 1px solid #cbd5e1;
             transform: translateX(-0.5px);
         }}
+        .gantt-tick-medium,
+        .gantt-tick-narrow {{
+            display: none;
+        }}
+        .gantt-tick-end span {{
+            transform: translateX(-100%);
+        }}
         .gantt-axis-top .gantt-tick {{
             bottom: 0;
         }}
@@ -2271,6 +2317,16 @@ def render_floating_task_selector_css() -> None:
             .gantt-layout {{ grid-template-columns: minmax(0, 1fr); }}
             .gantt-table-panel {{ display: none; }}
         }}
+        @media (max-width: 980px) {{
+            .gantt-tick-wide {{ display: none; }}
+            .gantt-tick-medium {{ display: block; }}
+            .gantt-tick-narrow {{ display: none; }}
+        }}
+        @media (max-width: 640px) {{
+            .gantt-tick-wide,
+            .gantt-tick-medium {{ display: none; }}
+            .gantt-tick-narrow {{ display: block; }}
+        }}
         @media (max-width: 720px) {{
             .gantt-legend-row {{ align-items: flex-start; }}
             .gantt-legend-group {{ width: 100%; justify-content: flex-start; overflow-x: auto; padding-bottom: 0.1rem; }}
@@ -2278,7 +2334,7 @@ def render_floating_task_selector_css() -> None:
                 grid-template-columns: minmax({GANTT_MOBILE_ROW_LABEL_WIDTH_PX}px, 42%) minmax(0, 1fr);
             }}
             .gantt-location-label {{ font-size:0.74rem; }}
-            .gantt-tick span {{ font-size: 0.66rem; }}
+            .gantt-tick span {{ font-size: 0.66rem; padding: 0 0.10rem; }}
             .gantt-bar {{ font-size:0.66rem; min-width: 12px; }}
         }}
         </style>
