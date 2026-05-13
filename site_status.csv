@@ -4,8 +4,8 @@ FL002,CHIPOLA RIVER,US,FL,Altha,30.44839151,-85.2846281,America/Chicago,Y,2026-0
 FL003,FOURMILE,US,FL,Altha,30.44839153,-85.2846281,America/Chicago,Y,2026-05-12,N/A,N/A,N/A,N/A,66/66,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1,66,-
 FL004,SHIRER BRANCH,US,FL,Clarksville,30.42545245,-85.23273999,America/Chicago,Y,2026-05-12,N/A,N/A,N/A,N/A,66/66,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1,66,-
 FL005,TEN MILE,US,FL,Altha,30.50425368,-85.16696285,America/Chicago,Y,2026-05-12,N/A,N/A,N/A,N/A,66/66,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1,66,-
-FL006,BLACKWATER RIVER,US,FL,Milton,30.64915185,-86.94593818,America/Chicago,Y,2026-05-12,-,-,-,-,54/54,3.0.05_2026/03/04,3.0.05_2026/03/04,3.0.02_2024/12/12,2026-05-04,Commercial operation,1.5,54,-
-FL007,CANOE,US,FL,Holt,30.68096031,-86.79231311,America/Chicago,Y,2026-05-12,-,-,-,-,54/54,3.0.05_2026/03/04,3.0.05_2026/03/04,3.0.02_2024/12/12,2026-05-11,Commercial operation,1.5,54,-
+FL006,BLACKWATER RIVER,US,FL,Milton,30.64915185,-86.94593818,America/Chicago,Y,2026-05-12,6/6,6/6,-,54/54,54/54,3.0.05_2026/03/04,3.0.05_2026/03/04,3.0.02_2024/12/12,2026-05-04,Commercial operation,1.5,54,-
+FL007,CANOE,US,FL,Holt,30.68096031,-86.79231311,America/Chicago,Y,2026-05-12,0/6,2/6,2/48,6/6,54/54,3.0.05_2026/03/04,3.0.05_2026/03/04,3.0.02_2024/12/12,2026-05-11,Commercial operation,1.5,54,-
 FL008,LANSING SMITH,US,FL,Southport,30.27003327,-85.70043631,America/Chicago,Y,2026-05-12,-,-,-,-,-,-,-,-,2026-06-12,2026-08-03,1.5,360,-
 FL009,BIG BROOK,US,FL,Clarksville,30.49134488,-85.2828953,America/Chicago,Y,2026-05-12,66/66,66/66,2/23,66/66,66/66,3.0.05_3.0.06,3.0.05_3.0.06,3.0.02_2024/12/12,2026-05-05,2026-04-27,1.5,81,-
 FL010,SAND PINE,US,FL,Altha,30.44379786,-85.26154953,America/Chicago,Y,2026-05-12,66/66,120/120,39/39,39/39,81/81,3.0.06_2026/03/04,3.0.06_2026/03/04,3.0.02_2024/12/12,2026-04-21,2026-04-27,1.5,81,-
@@ -28,15 +28,15 @@ TX001,CROWNED HERON 1,US,TX,Richmond,29.48535501,-95.62241117,America/Chicago,Y,
 TX002,CROWNED HERON 2,US,TX,Richmond,29.48535503,-95.62241117,America/Chicago,Y,2026-05-12,N/A,N/A,N/A,N/A,92/92,1.1.01,1.1.01,1.1.01,2025-11-11,2026-04-06,1,92,-
 TX003,STONERIDGE,US,TX,Milam County,30.56553595,-97.11038816,America/Chicago,Y,2026-05-12,N/A,N/A,N/A,N/A,61/61,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1,61,-
 TX004,CARTWHEEL,US,TX,Sulphur Springs,33.08428743,-95.61474033,America/Chicago,Y,2026-05-12,N/A,N/A,N/A,N/A,92/92,1.1.01,1.1.01,1.1.01,Commercial operation,Commercial operation,1,92,-
-CA001,BELLEFIELD 2(AES),US,CA,Mojave,35.02071494,-118.07641,America/Los_Angeles,N,2026-05-12,-,-,-,-,,-,-,-,-,-,E5S,,-
-AZ002,WESTWING 2B(AES),US,AZ,Peoria,33.71365406,-112.3222723,America/Phoenix,N,2026-05-12,-,-,-,-,,-,-,-,-,-,E4L,,-
-AZ003,MCFARLAND C(AES),US,AZ,Dateland,32.95043237,-113.4885612,America/Phoenix,N,2026-05-12,-,-,-,-,,-,-,-,-,-,E4L,,-
-CA002,JASMINE(AES),US,CA,Bakersfield,35.09435775,-119.1109642,America/Los_Angeles,N,2026-05-12,-,-,-,-,,-,-,-,-,-,E5SU,,-
-CO001,EAGLE SPRINGS(AES),US,CO,Silt,39.52661991,-107.698399,America/Denver,N,2026-05-12,-,-,-,-,,-,-,-,-,-,E4L,,-
-HI001,WAIAWA(AES),US,HI,Pearl City,21.44496611,-157.9614801,Pacific/Honolulu,N,2026-05-12,-,-,-,-,,-,-,-,-,-,E4L,,-
-HI002,MOUNTAIN VIEW(AES),US,HI,Waianae,21.45318214,-158.1799849,Pacific/Honolulu,N,2026-05-12,-,-,-,-,,-,-,-,-,-,E4L,,-
-DE001,KASSEL,DE,-,Kassel,51.29894008,9.43274005,Europe/Berlin,N,2026-05-12,-,-,-,-,,-,-,-,-,-,1,,-
-PR001,SALINAS(FLUENCE),US,PR,Guayama,17.97595213,-66.20175255,America/Puerto_Rico,N,2026-05-12,-,-,-,-,,-,-,-,-,-,E4D,,-
-PR002,JOBOS(FLUENCE),US,PR,Guayama,17.95760124,-66.14922495,America/Puerto_Rico,N,2026-05-12,-,-,-,-,,-,-,-,-,-,E4D,,-
-CA003,"LAB, LUNA(FLUENCE)",US,CA,Lancaster,34.68367722,-118.3064936,America/Los_Angeles,N,2026-05-12,-,-,-,-,,-,-,-,-,-,E4D,,-
-TX005,SOUTHERN SELECT(AOP),US,TX,Texas City,29.39038058,-94.95181969,America/Chicago,N,2026-05-12,-,-,-,-,,-,-,-,-,-,1.7,,-
+CA001,BELLEFIELD 2(AES),US,CA,Mojave,35.02071494,-118.07641,America/Los_Angeles,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,E5S,,-
+AZ002,WESTWING 2B(AES),US,AZ,Peoria,33.71365406,-112.3222723,America/Phoenix,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,E4L,,-
+AZ003,MCFARLAND C(AES),US,AZ,Dateland,32.95043237,-113.4885612,America/Phoenix,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,E4L,,-
+CA002,JASMINE(AES),US,CA,Bakersfield,35.09435775,-119.1109642,America/Los_Angeles,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,E5SU,,-
+CO001,EAGLE SPRINGS(AES),US,CO,Silt,39.52661991,-107.698399,America/Denver,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,E4L,,-
+HI001,WAIAWA(AES),US,HI,Pearl City,21.44496611,-157.9614801,Pacific/Honolulu,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,E4L,,-
+HI002,MOUNTAIN VIEW(AES),US,HI,Waianae,21.45318214,-158.1799849,Pacific/Honolulu,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,E4L,,-
+DE001,KASSEL,DE,-,Kassel,51.29894008,9.43274005,Europe/Berlin,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,1,,-
+PR001,SALINAS(FLUENCE),US,PR,Guayama,17.97595213,-66.20175255,America/Puerto_Rico,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,E4D,,-
+PR002,JOBOS(FLUENCE),US,PR,Guayama,17.95760124,-66.14922495,America/Puerto_Rico,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,E4D,,-
+CA003,"LAB, LUNA(FLUENCE)",US,CA,Lancaster,34.68367722,-118.3064936,America/Los_Angeles,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,E4D,,-
+TX005,SOUTHERN SELECT(AOP),US,TX,Texas City,29.39038058,-94.95181969,America/Chicago,N,2026-05-12,-,-,-,-,-,-,-,-,-,-,1.7,,-
