@@ -49,7 +49,7 @@ DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
 SITE_METADATA_COLUMNS = {"version", "updated_date"}
 UPDATED_DATE_COLUMN_NAME = "updated_date"
 UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-dashboard_ver = "v1.23"
+dashboard_ver = "v1.24"
 DEFAULT_TASK_CONFIG_FILENAME = "task_config.csv"
 TASK_CONFIG_COLUMNS = ["task_name", "visible", "category", "display_order", "description"]
 
@@ -66,6 +66,7 @@ GANTT_HCX_COLOR = "#dc2626"
 GANTT_TODAY_COLOR = "#f59e0b"
 GANTT_COMMERCIAL_COLOR = "#facc15"
 GANTT_COMMERCIAL_OPERATION_LABEL = "Commercial Operation"
+SITE_OVERVIEW_ACTIVE_LABEL = "Active / Pre-COD"
 GANTT_CCX_ACTIVE_KPI_COLOR = "#bae6fd"
 GANTT_HCX_ACTIVE_KPI_COLOR = "#fbcfe8"
 GANTT_MIN_CHART_WIDTH_PX = 0
@@ -984,6 +985,24 @@ def is_kpi_calculation_task(task_name: str) -> bool:
     return not is_note_column(task_name) and not is_site_metadata_column(task_name) and not is_schedule_column(task_name)
 
 
+def _build_site_overview_groups(filtered_df: pd.DataFrame) -> dict[str, list[Any]]:
+    """Group currently displayed sites by commercial-operation status for the Site Overview KPI."""
+    groups: dict[str, list[Any]] = {
+        GANTT_COMMERCIAL_OPERATION_LABEL: [],
+        SITE_OVERVIEW_ACTIVE_LABEL: [],
+    }
+
+    for _, row in filtered_df.iterrows():
+        site_entry = {
+            "name": _get_site_display_name(row),
+            "schedule_phase": get_current_schedule_phase(row),
+        }
+        group_name = GANTT_COMMERCIAL_OPERATION_LABEL if _row_has_commercial_operation(row) else SITE_OVERVIEW_ACTIVE_LABEL
+        groups.setdefault(group_name, []).append(site_entry)
+
+    return {group_name: _sort_site_entries(site_entries) for group_name, site_entries in groups.items()}
+
+
 def calculate_kpis(
     df: pd.DataFrame,
     filtered_df: pd.DataFrame,
@@ -991,6 +1010,7 @@ def calculate_kpis(
     validation_issues: list[dict[str, Any]],
 ) -> dict[str, Any]:
     displayed_sites = len(filtered_df)
+    site_overview_groups = _build_site_overview_groups(filtered_df)
     complete_sites_by_version: dict[str, list[Any]] = {}
     incomplete_sites_by_version: dict[str, list[Any]] = {}
 
@@ -1039,6 +1059,11 @@ def calculate_kpis(
     incomplete_count = sum(len(site_names) for site_names in incomplete_sites_by_version.values())
 
     return {
+        "Site Overview": {
+            "count": displayed_sites,
+            "sites_by_group": site_overview_groups,
+        },
+        # Keep the legacy key for future compatibility with older downstream code.
         "Total Sites": {"count": displayed_sites},
         "Complete Sites": {
             "count": complete_count,
@@ -1049,7 +1074,6 @@ def calculate_kpis(
             "sites_by_version": incomplete_sites_by_version,
         },
     }
-
 
 # -----------------------------------------------------------------------------
 # Filtering
@@ -1841,6 +1865,16 @@ def render_floating_task_selector_css() -> None:
             border-color: #f472b6 !important;
             color: #0f172a !important;
         }
+        .kpi-site-pill-commercial-operation {
+            background: #fef08a !important;
+            border-color: #facc15 !important;
+            color: #111827 !important;
+        }
+        .kpi-site-pill-active-pre-cod {
+            background: #f8fafc !important;
+            border-color: #cbd5e1 !important;
+            color: #111827 !important;
+        }
         .kpi-empty-sites {
             color: #6b7280;
             font-size: 0.82rem;
@@ -2565,6 +2599,9 @@ def _kpi_site_pill_html(site_entry: Any) -> str:
     elif phase == "HCx":
         extra_class = " kpi-site-pill-hcx-active"
         title_suffix = " · Active HCx schedule"
+    elif phase == GANTT_COMMERCIAL_OPERATION_LABEL:
+        extra_class = " kpi-site-pill-commercial-operation"
+        title_suffix = " · Commercial Operation"
 
     safe_site_name = html.escape(site_name)
     safe_title = html.escape(site_name + title_suffix)
@@ -2575,9 +2612,11 @@ def _kpi_card_html(
     title: str,
     count: Any,
     sites_by_version: dict[str, list[Any]] | None = None,
+    group_label_prefix: str = "Version",
 ) -> str:
     safe_title = html.escape(str(title))
     safe_count = html.escape(str(count))
+    safe_group_label_prefix = html.escape(str(group_label_prefix))
     site_list_html = ""
 
     if sites_by_version is not None:
@@ -2587,16 +2626,22 @@ def _kpi_card_html(
                 safe_version = html.escape(str(version))
                 safe_version_count = html.escape(str(len(site_names)))
                 pills = "".join(_kpi_site_pill_html(site) for site in site_names)
+                group_prefix_html = (
+                    f"<span class='kpi-version-label-prefix'>{safe_group_label_prefix}</span>"
+                    if safe_group_label_prefix
+                    else ""
+                )
+                no_sites_html = "<span class='kpi-empty-sites'>No sites</span>" if not site_names else ""
                 version_groups.append(
                     "<div class='kpi-version-group'>"
                     "<div class='kpi-version-header'>"
                     "<span class='kpi-version-label'>"
-                    "<span class='kpi-version-label-prefix'>Version</span>"
+                    f"{group_prefix_html}"
                     f"<span>{safe_version}</span>"
                     "</span>"
                     f"<span class='kpi-version-count'>{safe_version_count} site(s)</span>"
                     "</div>"
-                    f"<div class='kpi-version-sites'>{pills}</div>"
+                    f"<div class='kpi-version-sites'>{pills}{no_sites_html}</div>"
                     "</div>"
                 )
             site_list_html = f"<div class='kpi-site-list'>{''.join(version_groups)}</div>"
@@ -2612,7 +2657,6 @@ def _kpi_card_html(
         {site_list_html}
     </div>
     """
-
 
 def _kpi_count(kpis: dict[str, Any], label: str) -> Any:
     value = kpis.get(label, {"count": 0})
@@ -2630,10 +2674,24 @@ def _kpi_sites_by_version(kpis: dict[str, Any], label: str) -> dict[str, list[An
     return {}
 
 
+def _kpi_sites_by_group(kpis: dict[str, Any], label: str) -> dict[str, list[Any]]:
+    value = kpis.get(label, {})
+    if isinstance(value, dict):
+        grouped = value.get("sites_by_group", {})
+        if isinstance(grouped, dict):
+            return {str(group_name): list(site_names) for group_name, site_names in grouped.items()}
+    return {}
+
+
 def render_kpi_cards(kpis: dict[str, Any]) -> None:
     cards_html = "".join(
         [
-            _kpi_card_html("Total Sites", _kpi_count(kpis, "Total Sites")),
+            _kpi_card_html(
+                "Site Overview",
+                _kpi_count(kpis, "Site Overview"),
+                _kpi_sites_by_group(kpis, "Site Overview"),
+                group_label_prefix="",
+            ),
             _kpi_card_html(
                 "Complete Sites",
                 _kpi_count(kpis, "Complete Sites"),
