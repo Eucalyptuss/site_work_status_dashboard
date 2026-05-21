@@ -11,10 +11,11 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import branca.colormap as cm
+from branca.element import MacroElement, Template
 import folium
 import pandas as pd
 import streamlit as st
-from folium.plugins import MarkerCluster
+from folium.plugins import Fullscreen, MarkerCluster
 from streamlit_folium import st_folium
 
 
@@ -49,7 +50,7 @@ DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
 SITE_METADATA_COLUMNS = {"version", "updated_date"}
 UPDATED_DATE_COLUMN_NAME = "updated_date"
 UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-dashboard_ver = "v1.24"
+dashboard_ver = "v1.29"
 DEFAULT_TASK_CONFIG_FILENAME = "task_config.csv"
 TASK_CONFIG_COLUMNS = ["task_name", "visible", "category", "display_order", "description"]
 
@@ -981,6 +982,105 @@ def get_version_filter_options(df: pd.DataFrame) -> list[str]:
     return sorted(versions, key=_version_sort_key)
 
 
+def _version_numeric_tuple(version: str) -> tuple[int, ...] | None:
+    """Return leading numeric version tuple such as (1, 5) from values like '1.5' or 'v1.5 (92)'."""
+    text = str(version).strip()
+    match = re.match(r"^\s*[vV]?\s*(\d+(?:\.\d+)*)", text)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def _version_matches_quick_target(version: str, target: str) -> bool:
+    version_tuple = _version_numeric_tuple(version)
+    target_tuple = _version_numeric_tuple(target)
+    if version_tuple is None or target_tuple is None:
+        return str(version).strip().casefold() == str(target).strip().casefold()
+    return version_tuple[: len(target_tuple)] == target_tuple
+
+
+def _get_quick_version_targets(version_options: list[str]) -> list[str]:
+    """Show the high-value quick filters first, then any other numeric major/minor versions."""
+    preferred = ["1.0", "1.5"]
+    targets: list[str] = []
+    for target in preferred:
+        if any(_version_matches_quick_target(option, target) for option in version_options):
+            targets.append(target)
+
+    discovered: set[str] = set(targets)
+    for option in version_options:
+        version_tuple = _version_numeric_tuple(option)
+        if version_tuple and len(version_tuple) >= 2:
+            target = f"{version_tuple[0]}.{version_tuple[1]}"
+            if target not in discovered:
+                discovered.add(target)
+                targets.append(target)
+    return targets
+
+
+def _version_css_class(version: str) -> str:
+    numeric = _version_numeric_tuple(version)
+    if not numeric:
+        return "version-other"
+    if numeric[:2] == (1, 0):
+        return "version-1-0"
+    if numeric[:2] == (1, 5):
+        return "version-1-5"
+    return "version-other"
+
+
+def _version_badge_palette(version: str) -> dict[str, str]:
+    css_class = _version_css_class(version)
+    if css_class == "version-1-0":
+        return {
+            "class": css_class,
+            "background": "#0f766e",  # teal
+            "border": "#2dd4bf",
+            "color": "#ffffff",
+            "shadow": "rgba(15,118,110,0.26)",
+        }
+    if css_class == "version-1-5":
+        return {
+            "class": css_class,
+            "background": "#7c3aed",  # violet
+            "border": "#c084fc",
+            "color": "#ffffff",
+            "shadow": "rgba(124,58,237,0.26)",
+        }
+    return {
+        "class": css_class,
+        "background": "#475569",  # slate
+        "border": "#94a3b8",
+        "color": "#ffffff",
+        "shadow": "rgba(71,85,105,0.24)",
+    }
+
+
+def _version_badge_html(version: str) -> str:
+    safe_version = html.escape(str(version))
+    palette = _version_badge_palette(version)
+    css_class = html.escape(palette["class"])
+    style = (
+        "display:inline-block;"
+        "border-radius:999px;"
+        "padding:1px 7px;"
+        "font-size:10px;"
+        "font-weight:900;"
+        "line-height:1.25;"
+        "white-space:nowrap;"
+        "letter-spacing:0.01em;"
+        f"background:{palette['background']} !important;"
+        f"border:1px solid {palette['border']} !important;"
+        f"color:{palette['color']} !important;"
+        f"box-shadow:0 1px 3px {palette['shadow']};"
+    )
+    return (
+        f"<span class='site-version-badge site-version-badge-{css_class}' "
+        f"style='{style}' "
+        f"title='Version {safe_version}'>Version {safe_version}</span>"
+    )
+
+
 def is_kpi_calculation_task(task_name: str) -> bool:
     return not is_note_column(task_name) and not is_site_metadata_column(task_name) and not is_schedule_column(task_name)
 
@@ -1157,7 +1257,11 @@ def build_site_label_html(row: pd.Series, selected_task_columns: list[str], show
         return ""
     site_name = html.escape(str(row.get("location_name", "")))
     location_id = html.escape(str(row.get("location_id", "")))
-    lines = [f"<div style='font-weight:800; margin-bottom:2px; color:#111827;'>{site_name}</div>"]
+    site_version = _get_site_version(row)
+    lines = [
+        f"<div style='font-weight:800; margin-bottom:2px; color:#111827;'>{site_name}</div>",
+        f"<div class='site-version-row' style='margin:2px 0 3px 0;'>{_version_badge_html(site_version)}</div>",
+    ]
     if len(selected_task_columns) == 1:
         task = selected_task_columns[0]
         parsed = parse_task_status_value(task, row.get(task, ""))
@@ -1252,13 +1356,32 @@ def build_popup_html(
 # -----------------------------------------------------------------------------
 # Map rendering
 # -----------------------------------------------------------------------------
+class SiteStatusLegend(MacroElement):
+    _template = Template(
+        """
+        {% macro script(this, kwargs) %}
+        var {{ this.get_name() }} = L.control({position: 'bottomleft'});
+        {{ this.get_name() }}.onAdd = function (map) {
+            var div = L.DomUtil.create('div', 'site-status-map-legend leaflet-control');
+            div.innerHTML = {{ this.legend_html|tojson }};
+            L.DomEvent.disableClickPropagation(div);
+            L.DomEvent.disableScrollPropagation(div);
+            return div;
+        };
+        {{ this.get_name() }}.addTo({{ this._parent.get_name() }});
+        {% endmacro %}
+        """
+    )
+
+    def __init__(self, legend_html: str) -> None:
+        super().__init__()
+        self._name = "SiteStatusLegend"
+        self.legend_html = legend_html
+
+
 def add_legend_to_map(map_obj: folium.Map) -> None:
     legend_html = """
     <div style="
-        position: fixed;
-        bottom: 30px;
-        left: 30px;
-        z-index: 9999;
         background: #ffffff;
         color: #111827;
         border: 1px solid #9ca3af;
@@ -1268,6 +1391,9 @@ def add_legend_to_map(map_obj: folium.Map) -> None:
         line-height: 1.55;
         font-weight: 600;
         box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+        max-width: 245px;
+        max-height: 42vh;
+        overflow-y: auto;
     ">
       <div style="font-weight:800; font-size:14px; margin-bottom:7px; color:#000000;">Status Legend</div>
       <div><span style="background:#2e7d32;width:11px;height:11px;display:inline-block;border-radius:50%;margin-right:6px;"></span>Complete / 100%</div>
@@ -1279,7 +1405,7 @@ def add_legend_to_map(map_obj: folium.Map) -> None:
       <div><span style="background:#6a1b9a;width:11px;height:11px;display:inline-block;border-radius:50%;margin-right:6px;"></span>Invalid / Data issue</div>
     </div>
     """
-    map_obj.get_root().html.add_child(folium.Element(legend_html))
+    map_obj.add_child(SiteStatusLegend(legend_html))
 
 
 
@@ -1308,6 +1434,12 @@ def create_folium_map(
     center_lon = float(bounds_df["_longitude_num"].mean())
     initial_zoom = 10 if len(bounds_df) == 1 else 6
     map_obj = folium.Map(location=[center_lat, center_lon], zoom_start=initial_zoom, tiles="CartoDB positron", control_scale=True)
+    Fullscreen(
+        position="topleft",
+        title="Full screen",
+        title_cancel="Exit full screen",
+        force_separate_button=True,
+    ).add_to(map_obj)
 
     if len(bounds_df) >= 2:
         map_obj.fit_bounds(
@@ -1900,6 +2032,22 @@ def render_floating_task_selector_css() -> None:
             font-weight: 900;
             margin-bottom: 0.36rem;
             line-height: 1.2;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.55rem;
+            padding: 0.34rem 0.48rem;
+        }
+        .kpi-version-group-version-1-0 .kpi-version-header {
+            background: #ccfbf1;
+            border-color: #2dd4bf;
+        }
+        .kpi-version-group-version-1-5 .kpi-version-header {
+            background: #f3e8ff;
+            border-color: #c084fc;
+        }
+        .kpi-version-group-version-other .kpi-version-header {
+            background: #f8fafc;
+            border-color: #cbd5e1;
         }
         .kpi-version-label {
             display: inline-flex;
@@ -1957,6 +2105,40 @@ def render_floating_task_selector_css() -> None:
         .site-label-name { font-weight: 800; margin-bottom: 2px; color: #111827; }
         .site-label-task { margin-top: 2px; color: #111827; }
         .site-label-badge { color: #fff; border-radius: 999px; padding: 1px 5px; font-size: 10px; }
+        .site-version-row { margin: 2px 0 3px 0; }
+        .site-version-badge {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 1px 7px;
+            font-size: 10px;
+            font-weight: 900;
+            line-height: 1.25;
+            border: 1px solid rgba(17,24,39,0.18);
+            color: #ffffff;
+            white-space: nowrap;
+            box-shadow: 0 1px 3px rgba(15,23,42,0.22);
+            letter-spacing: 0.01em;
+        }
+        .site-version-badge-version-1-0 {
+            background: #0f766e;
+            border-color: #2dd4bf;
+            color: #ffffff;
+        }
+        .site-version-badge-version-1-5 {
+            background: #7c3aed;
+            border-color: #c084fc;
+            color: #ffffff;
+        }
+        .site-version-badge-version-other {
+            background: #475569;
+            border-color: #94a3b8;
+            color: #ffffff;
+        }
+        .kpi-version-header .site-version-badge {
+            font-size: 0.74rem;
+            padding: 0.18rem 0.55rem;
+            line-height: 1.15;
+        }
         [data-testid="stSidebar"] div.stButton > button {
             min-height: 2.6rem !important;
             height: 2.6rem !important;
@@ -2502,6 +2684,38 @@ def render_task_config_summary(all_task_columns: list[str], visible_task_columns
         st.sidebar.caption(f"Hidden by task_config: {preview}")
 
 
+def render_version_quick_filter(df: pd.DataFrame) -> None:
+    """Render top-of-sidebar quick filters for common product versions."""
+    version_options = get_version_filter_options(df)
+    if not version_options:
+        return
+
+    quick_targets = _get_quick_version_targets(version_options)
+    st.sidebar.subheader("Version Quick Filter")
+
+    button_labels = ["All"] + quick_targets
+    columns = st.sidebar.columns(len(button_labels))
+    for col, label in zip(columns, button_labels):
+        with col:
+            if st.button(label, use_container_width=True, key=f"version_quick_filter__{label}"):
+                if label == "All":
+                    st.session_state["filter_version"] = []
+                else:
+                    matched_versions = [
+                        option for option in version_options if _version_matches_quick_target(option, label)
+                    ]
+                    st.session_state["filter_version"] = matched_versions
+                st.rerun()
+
+    selected_versions = st.session_state.get("filter_version", [])
+    if selected_versions:
+        selected_text = ", ".join(str(version) for version in selected_versions)
+        st.sidebar.caption(f"Current Version filter: {selected_text}")
+    else:
+        st.sidebar.caption("Current Version filter: All")
+    st.sidebar.divider()
+
+
 def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[str, Any]:
     st.sidebar.header("Filters")
     if st.sidebar.button("Reset filters", use_container_width=True):
@@ -2583,6 +2797,12 @@ def render_dashboard_meta_header(source_name: str, updated_date: str, total_site
     )
 
 
+def _kpi_group_css_class(group_name: str, group_label_prefix: str = "Version") -> str:
+    if str(group_label_prefix).strip().casefold() != "version":
+        return "kpi-version-group-other"
+    return f"kpi-version-group-{_version_css_class(group_name)}"
+
+
 def _kpi_site_pill_html(site_entry: Any) -> str:
     if isinstance(site_entry, dict):
         site_name = str(site_entry.get("name", ""))
@@ -2626,18 +2846,22 @@ def _kpi_card_html(
                 safe_version = html.escape(str(version))
                 safe_version_count = html.escape(str(len(site_names)))
                 pills = "".join(_kpi_site_pill_html(site) for site in site_names)
-                group_prefix_html = (
-                    f"<span class='kpi-version-label-prefix'>{safe_group_label_prefix}</span>"
-                    if safe_group_label_prefix
-                    else ""
-                )
+                if str(group_label_prefix).strip().casefold() == "version":
+                    group_label_html = _version_badge_html(str(version))
+                else:
+                    group_prefix_html = (
+                        f"<span class='kpi-version-label-prefix'>{safe_group_label_prefix}</span>"
+                        if safe_group_label_prefix
+                        else ""
+                    )
+                    group_label_html = f"{group_prefix_html}<span>{safe_version}</span>"
                 no_sites_html = "<span class='kpi-empty-sites'>No sites</span>" if not site_names else ""
+                group_css_class = html.escape(_kpi_group_css_class(str(version), group_label_prefix))
                 version_groups.append(
-                    "<div class='kpi-version-group'>"
+                    f"<div class='kpi-version-group {group_css_class}'>"
                     "<div class='kpi-version-header'>"
                     "<span class='kpi-version-label'>"
-                    f"{group_prefix_html}"
-                    f"<span>{safe_version}</span>"
+                    f"{group_label_html}"
                     "</span>"
                     f"<span class='kpi-version-count'>{safe_version_count} site(s)</span>"
                     "</div>"
@@ -2771,7 +2995,11 @@ def render_data_table(filtered_df: pd.DataFrame, selected_task_columns: list[str
         if len(selected_task_columns) == 1:
             table[f"{task}__percent"] = table[task].apply(lambda value, task=task: parse_task_status_value(task, value)["percent"])
 
-    base_cols = ["location_id", "location_name", "country", "state", "city", "enabled"]
+    version_col = _get_version_column_name(table.columns)
+    base_cols = ["location_id", "location_name"]
+    if version_col is not None:
+        base_cols.append(version_col)
+    base_cols.extend(["country", "state", "city", "enabled"])
     selected_display_cols = []
     for task in selected_task_columns:
         selected_display_cols.append(task)
@@ -2868,6 +3096,7 @@ def main() -> None:
     if not task_columns:
         st.warning("All work items are hidden by task_config.csv. The dashboard will show site/map context only until at least one task is set visible=Y.")
 
+    render_version_quick_filter(validated_df)
     selected_task_columns = render_task_selector(task_columns)
     render_task_config_summary(all_task_columns, task_columns, task_config_meta)
     filters = render_sidebar_filters(validated_df, task_columns)
