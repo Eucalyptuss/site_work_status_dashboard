@@ -1,13 +1,14 @@
-task_name,visible,category,display_order,description
-³ªºñ º¼ ¹ëºê,Y,Active Work,20,Currently managed work item
-¹è¼± ºĞ¸®,Y,Active Work,30,Currently managed work item
-¼Ö ¹ëºê ¿À¸µ,Y,Active Work,10,Currently managed work item
-¿öÅÍ ÆßÇÁ ´©¼ö Á¡°Ë,Y,Active Work,40,Firmware version information
+ï»¿task_name,visible,category,display_order,description
+ë‚˜ë¹„ ë³¼ ë°¸ë¸Œ,Y,Active Work,20,Currently managed work item
+ë°°ì„  ë¶„ë¦¬,Y,Active Work,30,Currently managed work item
+ì†” ë°¸ë¸Œ ì˜¤ë§,Y,Active Work,10,Currently managed work item
+ì›Œí„° íŒí”„ ëˆ„ìˆ˜ ì ê²€,Y,Active Work,40,Firmware version information
 F/W Update,Y,Active Work,50,Free text notes; excluded from KPI completion counts
 Chiller#1 F/W Version,Y,Information,60,Firmware version information
 Chiller#2 F/W Version,Y,Information,70,Firmware version information
 HVAC F/W Version,Y,Information,80,Firmware version information
-CCx Start,Y,Information,90,Cold Commissionting Start Date
-HCx Start,Y,Information,100,Hot Commissionting Start Date
+CCx Start,Y,Schedule,90,Cold Commissionting Start Date
+HCx Start,Y,Schedule,100,Hot Commissionting Start Date
+COD,Y,Schedule,110,COD Date
 QTY,Y,Information,980,Number of EQP
 Note,Y,Information,990,Text note
