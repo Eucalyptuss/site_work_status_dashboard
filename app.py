@@ -3437,7 +3437,7 @@ def main() -> None:
     with st.expander("Selected Site Detail", expanded=True):
         render_selected_site_detail(selected_site, task_columns, selected_task_columns)
 
-    with st.expander("Data Table", expanded=True):
+    with st.expander("Data Table", expanded=False):
         filtered_table = render_data_table(filtered_df, selected_task_columns)
 
     with st.expander("Data Quality Report", expanded=False):
