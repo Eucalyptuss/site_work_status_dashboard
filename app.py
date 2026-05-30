@@ -19,9 +19,9 @@ from folium.plugins import Fullscreen, MarkerCluster
 from streamlit_folium import st_folium
 
 
-# -----------------------------------------------------------------------------
-# Page configuration
-# -----------------------------------------------------------------------------
+
+
+
 st.set_page_config(
     page_title="Site Work Status Map Dashboard",
     page_icon="🗺️",
@@ -41,7 +41,7 @@ REQUIRED_COLUMNS: list[str] = [
     "enabled",
 ]
 
-NA_VALUES = {"n/a", "na", "not applicable", "해당없음"}
+NA_VALUES = {"n/a", "na", "#n/a", "#na", "#n/a!", "not applicable", "not available", "null", "none", "해당없음"}
 DASH_PLACEHOLDERS = {"-", "–", "—"}
 VALID_TRUE = {"y", "yes", "true", "1"}
 VALID_FALSE = {"n", "no", "false", "0"}
@@ -50,12 +50,13 @@ DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
 SITE_METADATA_COLUMNS = {"version", "updated_date"}
 UPDATED_DATE_COLUMN_NAME = "updated_date"
 UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-dashboard_ver = "v1.29"
+dashboard_ver = "v1.36"
 DEFAULT_TASK_CONFIG_FILENAME = "task_config.csv"
 TASK_CONFIG_COLUMNS = ["task_name", "visible", "category", "display_order", "description"]
 
 CCX_START_COLUMN_NAME = "CCx Start"
 HCX_START_COLUMN_NAME = "HCx Start"
+COD_COLUMN_NAME = "COD"
 GANTT_TABLE_HIDE_BREAKPOINT_PX = 1100
 GANTT_LOOKBACK_DAYS = 7
 GANTT_LOOKAHEAD_MONTHS = 2
@@ -66,6 +67,7 @@ GANTT_CCX_COLOR = "#2563eb"
 GANTT_HCX_COLOR = "#dc2626"
 GANTT_TODAY_COLOR = "#f59e0b"
 GANTT_COMMERCIAL_COLOR = "#facc15"
+GANTT_COD_COLOR = "#b45309"
 GANTT_COMMERCIAL_OPERATION_LABEL = "Commercial Operation"
 SITE_OVERVIEW_ACTIVE_LABEL = "Active / Pre-COD"
 GANTT_CCX_ACTIVE_KPI_COLOR = "#bae6fd"
@@ -112,25 +114,31 @@ STRING_STATUS_PALETTE = [
     "#f4511e",
 ]
 
-SAMPLE_CSV = """location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,Valve1,Valve2,Water Pump,Chiller F/W Version,HVAC F/W Version
-FL001,BLACKWATER RIVER,US,FL,Milton,30.6,-86.9,America/Chicago,Y,60/66,N/A,10/66,3.0.0.0,3.0.0.1
-FL002,CANOE,US,FL,Holt,30.6,-86.7,America/Chicago,Y,20/183,183/183,183/183,3.0.0.2,3.0.0.6
-FL003,SAMPLE DISABLED,US,TX,Dallas,32.7,-96.7,America/Chicago,N,5/10,NA,,Pending,Completed
+SAMPLE_CSV = """location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,Version,updated_date,CCx Start,HCx Start,COD,F/W Update,Valve1,Valve2,Water Pump,Chiller#1 F/W Version,Chiller#2 F/W Version,HVAC F/W Version,Note
+FL001,BLACKWATER RIVER,US,FL,Milton,30.6,-86.9,America/Chicago,Y,1.5,2026-05-30,2026-05-01,2026-05-15,2026-05-29,3/3,60/66,N/A,10/66,3.0.0.0,3.0.0.0,3.0.0.1,Pending COD review
+FL002,CANOE,US,FL,Holt,30.6,-86.7,America/Chicago,Y,1.5,2026-05-30,2026-05-08,2026-05-22,#N/A,1/3,20/183,183/183,183/183,3.0.0.2,3.0.0.2,3.0.0.6,Active schedule
+FL003,CARTWHEEL,US,FL,Jay,30.9,-87.1,America/Chicago,Y,1.0,2026-05-30,Commercial Operation,N/A,#N/A,3/3,66/66,183/183,N/A,3.0.0.2,3.0.0.2,3.0.0.6,Legacy commercial operation entry
+FL004,SAMPLE DISABLED,US,TX,Dallas,32.7,-96.7,America/Chicago,N,1.0,2026-05-30,,,,0/3,5/10,NA,,Pending,Pending,Completed,Disabled sample
 """
 
 SAMPLE_TASK_CONFIG_CSV = """task_name,visible,category,display_order,description
+CCx Start,Y,Schedule,5,CCx start date
+HCx Start,Y,Schedule,6,HCx start date
+COD,Y,Schedule,7,Commercial operation date
+F/W Update,Y,Active Work,8,Firmware update completion basis
 Valve1,Y,Active Work,10,Currently managed work item
 Valve2,Y,Active Work,20,Currently managed work item
 Water Pump,Y,Active Work,30,Currently managed work item
-Chiller F/W Version,Y,Information,40,Firmware version information
-HVAC F/W Version,Y,Information,50,Firmware version information
+Chiller#1 F/W Version,Y,Information,40,Firmware version information; completion follows F/W Update
+Chiller#2 F/W Version,Y,Information,50,Firmware version information; completion follows F/W Update
+HVAC F/W Version,Y,Information,60,Firmware version information; completion follows F/W Update
 Note,Y,Information,999,Free text notes; excluded from KPI completion counts
 """
 
 
-# -----------------------------------------------------------------------------
-# CSV / data processing
-# -----------------------------------------------------------------------------
+
+
+
 def get_required_columns() -> list[str]:
     return REQUIRED_COLUMNS.copy()
 
@@ -212,7 +220,7 @@ def get_updated_date_display(df: pd.DataFrame) -> str:
 
     source_df = df
     if "_enabled_bool" in source_df.columns:
-        source_df = source_df[source_df["_enabled_bool"] == True]  # noqa: E712
+        source_df = source_df[source_df["_enabled_bool"] == True]
 
     values = [
         str(value).strip()
@@ -299,7 +307,7 @@ def _validate_schedule_date_metadata(
     enabled_working: pd.DataFrame,
     issues: list[dict[str, Any]],
 ) -> None:
-    for schedule_column in (CCX_START_COLUMN_NAME, HCX_START_COLUMN_NAME):
+    for schedule_column in (CCX_START_COLUMN_NAME, HCX_START_COLUMN_NAME, COD_COLUMN_NAME):
         actual_col = _get_schedule_column_name(working.columns, schedule_column)
         if actual_col is None:
             continue
@@ -308,7 +316,7 @@ def _validate_schedule_date_metadata(
             text = str(raw_value).strip()
             if not text or text.lower() in NA_VALUES or text in DASH_PLACEHOLDERS:
                 continue
-            if _is_commercial_operation_value(text):
+            if schedule_column in (CCX_START_COLUMN_NAME, HCX_START_COLUMN_NAME) and _is_commercial_operation_value(text):
                 continue
             if _parse_schedule_date(text) is None:
                 _add_issue(
@@ -488,7 +496,7 @@ def is_note_column(column_name: str) -> bool:
 
 def is_schedule_column(column_name: str) -> bool:
     normalized = str(column_name).strip().lower()
-    return normalized in {CCX_START_COLUMN_NAME.lower(), HCX_START_COLUMN_NAME.lower()}
+    return normalized in {CCX_START_COLUMN_NAME.lower(), HCX_START_COLUMN_NAME.lower(), COD_COLUMN_NAME.lower()}
 
 
 def normalize_enabled(value: Any) -> bool | None:
@@ -555,7 +563,7 @@ def validate_dataframe(
                 "WARNING",
             )
 
-    enabled_working = working[working["_enabled_bool"] == True].copy()  # noqa: E712
+    enabled_working = working[working["_enabled_bool"] == True].copy()
 
     _validate_updated_date_metadata(working, enabled_working, issues)
     _validate_schedule_date_metadata(working, enabled_working, issues)
@@ -582,7 +590,7 @@ def validate_dataframe(
 
     working["_latitude_num"] = pd.to_numeric(working["latitude"], errors="coerce")
     working["_longitude_num"] = pd.to_numeric(working["longitude"], errors="coerce")
-    for idx, row in working[working["_enabled_bool"] == True].iterrows():  # noqa: E712
+    for idx, row in working[working["_enabled_bool"] == True].iterrows():
         if pd.isna(row.get("_latitude_num")):
             _add_issue(
                 issues,
@@ -604,7 +612,7 @@ def validate_dataframe(
                 "ERROR",
             )
 
-    for idx, row in working[working["_enabled_bool"] == True].iterrows():  # noqa: E712
+    for idx, row in working[working["_enabled_bool"] == True].iterrows():
         tz = str(row.get("timezone", "")).strip()
         if tz:
             try:
@@ -630,7 +638,7 @@ def validate_dataframe(
                 "INFO",
             )
 
-    for idx, row in working[working["_enabled_bool"] == True].iterrows():  # noqa: E712
+    for idx, row in working[working["_enabled_bool"] == True].iterrows():
         for task in task_columns:
             parsed = parse_task_status_value(task, row.get(task, ""))
             if parsed["type"] == "invalid_progress":
@@ -855,9 +863,9 @@ def get_color_for_string_status(value: str, color_map: dict[str, str]) -> str:
     return color_map.get(str(value), STATUS_COLORS["gray"])
 
 
-# -----------------------------------------------------------------------------
-# Status calculations
-# -----------------------------------------------------------------------------
+
+
+
 def calculate_site_summary_for_selected_tasks(row: pd.Series, selected_task_columns: list[str]) -> dict[str, Any]:
     parsed_map = parse_all_task_statuses(row, selected_task_columns)
     progress_values = [p["percent"] for p in parsed_map.values() if p["type"] == "progress" and p["percent"] is not None]
@@ -971,9 +979,9 @@ def get_version_filter_options(df: pd.DataFrame) -> list[str]:
 
     source_df = df.copy()
     if "_enabled_bool" in source_df.columns:
-        source_df = source_df[source_df["_enabled_bool"] == True]  # noqa: E712
+        source_df = source_df[source_df["_enabled_bool"] == True]
     if "_can_display" in source_df.columns:
-        source_df = source_df[source_df["_can_display"] == True]  # noqa: E712
+        source_df = source_df[source_df["_can_display"] == True]
 
     versions = {
         str(value).strip() if str(value).strip() else "No Version"
@@ -983,12 +991,28 @@ def get_version_filter_options(df: pd.DataFrame) -> list[str]:
 
 
 def _version_numeric_tuple(version: str) -> tuple[int, ...] | None:
-    """Return leading numeric version tuple such as (1, 5) from values like '1.5' or 'v1.5 (92)'."""
     text = str(version).strip()
-    match = re.match(r"^\s*[vV]?\s*(\d+(?:\.\d+)*)", text)
+    match = re.search(r"(?<!\d)(?:version\s*)?[vV]?\s*(\d+(?:\.\d+)*)(?!\d)", text, flags=re.IGNORECASE)
     if not match:
         return None
-    return tuple(int(part) for part in match.group(1).split("."))
+    parts: list[int] = []
+    for part in match.group(1).split("."):
+        try:
+            parts.append(int(part))
+        except Exception:
+            return None
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
+def _normalize_version_target(value: Any) -> str:
+    version_tuple = _version_numeric_tuple(str(value))
+    if version_tuple is None:
+        return str(value).strip().casefold()
+    if len(version_tuple) == 1:
+        return f"{version_tuple[0]}.0"
+    return f"{version_tuple[0]}.{version_tuple[1]}"
 
 
 def _version_matches_quick_target(version: str, target: str) -> bool:
@@ -996,27 +1020,30 @@ def _version_matches_quick_target(version: str, target: str) -> bool:
     target_tuple = _version_numeric_tuple(target)
     if version_tuple is None or target_tuple is None:
         return str(version).strip().casefold() == str(target).strip().casefold()
-    return version_tuple[: len(target_tuple)] == target_tuple
+    normalized_version = _normalize_version_target(version)
+    normalized_target = _normalize_version_target(target)
+    return normalized_version == normalized_target
 
 
 def _get_quick_version_targets(version_options: list[str]) -> list[str]:
-    """Show the high-value quick filters first, then any other numeric major/minor versions."""
     preferred = ["1.0", "1.5"]
     targets: list[str] = []
+    discovered: set[str] = set()
     for target in preferred:
         if any(_version_matches_quick_target(option, target) for option in version_options):
-            targets.append(target)
-
-    discovered: set[str] = set(targets)
-    for option in version_options:
-        version_tuple = _version_numeric_tuple(option)
-        if version_tuple and len(version_tuple) >= 2:
-            target = f"{version_tuple[0]}.{version_tuple[1]}"
-            if target not in discovered:
-                discovered.add(target)
+            normalized = _normalize_version_target(target)
+            if normalized not in discovered:
+                discovered.add(normalized)
                 targets.append(target)
-    return targets
 
+    for option in version_options:
+        normalized = _normalize_version_target(option)
+        if not normalized or normalized.casefold() in {"no version", "none", "not set"}:
+            continue
+        if normalized not in discovered:
+            discovered.add(normalized)
+            targets.append(normalized)
+    return targets
 
 def _version_css_class(version: str) -> str:
     numeric = _version_numeric_tuple(version)
@@ -1034,7 +1061,7 @@ def _version_badge_palette(version: str) -> dict[str, str]:
     if css_class == "version-1-0":
         return {
             "class": css_class,
-            "background": "#0f766e",  # teal
+            "background": "#0f766e",
             "border": "#2dd4bf",
             "color": "#ffffff",
             "shadow": "rgba(15,118,110,0.26)",
@@ -1042,14 +1069,14 @@ def _version_badge_palette(version: str) -> dict[str, str]:
     if css_class == "version-1-5":
         return {
             "class": css_class,
-            "background": "#7c3aed",  # violet
+            "background": "#7c3aed",
             "border": "#c084fc",
             "color": "#ffffff",
             "shadow": "rgba(124,58,237,0.26)",
         }
     return {
         "class": css_class,
-        "background": "#475569",  # slate
+        "background": "#475569",
         "border": "#94a3b8",
         "color": "#ffffff",
         "shadow": "rgba(71,85,105,0.24)",
@@ -1081,23 +1108,145 @@ def _version_badge_html(version: str) -> str:
     )
 
 
+
+def _canonical_name(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value).strip().lower())
+
+
+def _find_column_by_canonical_names(columns: Any, candidates: list[str]) -> str | None:
+    wanted = {_canonical_name(candidate) for candidate in candidates}
+    for col in columns:
+        if _canonical_name(col) in wanted:
+            return str(col)
+    return None
+
+
+def _is_fw_version_column(column_name: str) -> bool:
+    normalized = _canonical_name(column_name)
+    return normalized in {
+        "chiller1fwversion",
+        "chiller2fwversion",
+        "chillerfwversion",
+        "hvacfwversion",
+    } or normalized.endswith("fwversion")
+
+
+def _is_fw_update_column(column_name: str) -> bool:
+    return _canonical_name(column_name) in {"fwupdate", "firmwareupdate", "fupdate"}
+
+
+def _get_fw_update_column_name(columns: Any) -> str | None:
+    return _find_column_by_canonical_names(columns, ["F/W Update", "FW Update", "Firmware Update", "F Update"])
+
+
+def _get_schedule_phase_for_column(task_name: str) -> str | None:
+    normalized = _canonical_name(task_name)
+    if normalized == _canonical_name(CCX_START_COLUMN_NAME):
+        return "CCx"
+    if normalized == _canonical_name(HCX_START_COLUMN_NAME):
+        return "HCx"
+    if normalized == _canonical_name(COD_COLUMN_NAME):
+        return "COD"
+    return None
+
+
+def _build_schedule_segments_for_row(row: pd.Series) -> list[dict[str, Any]]:
+    cod_date = _get_cod_date_for_row(row)
+    segments: list[dict[str, Any]] = []
+    for segment in _build_schedule_segments_from_events(_get_schedule_events_for_row(row)):
+        start = segment["start"]
+        end = segment["end"]
+        if cod_date is not None:
+            if start >= cod_date:
+                continue
+            end = min(end, cod_date)
+        if end > start:
+            segments.append({**segment, "end": end})
+    if cod_date is not None:
+        segments.append({"type": "COD", "start": cod_date, "end": cod_date, "color": GANTT_COD_COLOR})
+    return segments
+
+
+def _make_kpi_status(status_type: str, display_text: str, percent: float | None = None, issue: str | None = None) -> dict[str, Any]:
+    return {
+        "raw_value": display_text,
+        "type": status_type,
+        "completed": None,
+        "total": None,
+        "percent": percent,
+        "display_text": display_text,
+        "color": get_color_for_progress(percent) if percent is not None else "gray",
+        "issue": issue,
+    }
+
+
+def _schedule_kpi_status_for_row(row: pd.Series, task_name: str, today: datetime | None = None) -> dict[str, Any]:
+    phase = _get_schedule_phase_for_column(task_name)
+    current_day = _today_start(today)
+    if phase is None:
+        return _make_kpi_status("not_applicable", "N/A")
+    if phase in {"CCx", "HCx"}:
+        actual_col = _get_schedule_column_name(row.index, CCX_START_COLUMN_NAME if phase == "CCx" else HCX_START_COLUMN_NAME)
+        raw_value = row.get(actual_col, "") if actual_col is not None else ""
+        raw_text = str(raw_value).strip()
+        if _row_has_commercial_operation(row, current_day):
+            return _make_kpi_status("progress", "Complete", 100.0)
+        if not raw_text or raw_text.lower() in NA_VALUES or raw_text in DASH_PLACEHOLDERS:
+            return _make_kpi_status("not_applicable", "N/A")
+        start_date = _parse_schedule_date(raw_value)
+        if start_date is None:
+            return _make_kpi_status("invalid_progress", "Invalid schedule date", None, "Invalid schedule date.")
+        segment = next((item for item in _build_schedule_segments_for_row(row) if item.get("type") == phase and item.get("start") == start_date), None)
+        end_date = segment.get("end") if segment is not None else start_date + timedelta(days=GANTT_PHASE_BAR_DAYS)
+        if current_day >= end_date:
+            return _make_kpi_status("progress", f"Complete · ends {end_date.strftime('%Y-%m-%d')}", 100.0)
+        return _make_kpi_status("progress", f"Incomplete · ends {end_date.strftime('%Y-%m-%d')}", 0.0)
+    actual_col = _get_cod_column_name(row.index)
+    raw_value = row.get(actual_col, "") if actual_col is not None else ""
+    raw_text = str(raw_value).strip()
+    if not raw_text or raw_text.lower() in NA_VALUES or raw_text in DASH_PLACEHOLDERS:
+        return _make_kpi_status("not_applicable", "N/A")
+    cod_date = _parse_schedule_date(raw_value)
+    if cod_date is None:
+        return _make_kpi_status("invalid_progress", "Invalid COD date", None, "Invalid COD date.")
+    if current_day >= cod_date:
+        return _make_kpi_status("progress", f"Complete · COD {cod_date.strftime('%Y-%m-%d')}", 100.0)
+    return _make_kpi_status("progress", f"Incomplete · COD {cod_date.strftime('%Y-%m-%d')}", 0.0)
+
+
+def _build_kpi_statuses_for_row(row: pd.Series, selected_task_columns: list[str]) -> dict[str, dict[str, Any]]:
+    statuses: dict[str, dict[str, Any]] = {}
+    fw_update_col = _get_fw_update_column_name(row.index)
+    for task in selected_task_columns:
+        if is_note_column(task) or is_site_metadata_column(task) or is_schedule_column(task):
+            continue
+        if _is_fw_version_column(task):
+            if fw_update_col is not None:
+                statuses[f"{task} → {fw_update_col}"] = parse_task_status_value(fw_update_col, row.get(fw_update_col, ""))
+            continue
+        if _is_fw_update_column(task):
+            statuses[task] = parse_task_status_value(task, row.get(task, ""))
+            continue
+        statuses[task] = parse_task_status_value(task, row.get(task, ""))
+    return statuses
+
 def is_kpi_calculation_task(task_name: str) -> bool:
     return not is_note_column(task_name) and not is_site_metadata_column(task_name) and not is_schedule_column(task_name)
 
 
 def _build_site_overview_groups(filtered_df: pd.DataFrame) -> dict[str, list[Any]]:
-    """Group currently displayed sites by commercial-operation status for the Site Overview KPI."""
     groups: dict[str, list[Any]] = {
         GANTT_COMMERCIAL_OPERATION_LABEL: [],
         SITE_OVERVIEW_ACTIVE_LABEL: [],
     }
+    today = _today_start()
 
     for _, row in filtered_df.iterrows():
         site_entry = {
             "name": _get_site_display_name(row),
-            "schedule_phase": get_current_schedule_phase(row),
+            "schedule_phase": get_current_schedule_phase(row, today),
         }
-        group_name = GANTT_COMMERCIAL_OPERATION_LABEL if _row_has_commercial_operation(row) else SITE_OVERVIEW_ACTIVE_LABEL
+        group_name = GANTT_COMMERCIAL_OPERATION_LABEL if _row_has_commercial_operation(row, today) else SITE_OVERVIEW_ACTIVE_LABEL
         groups.setdefault(group_name, []).append(site_entry)
 
     return {group_name: _sort_site_entries(site_entries) for group_name, site_entries in groups.items()}
@@ -1114,10 +1263,8 @@ def calculate_kpis(
     complete_sites_by_version: dict[str, list[Any]] = {}
     incomplete_sites_by_version: dict[str, list[Any]] = {}
 
-    kpi_task_columns = [task for task in selected_task_columns if is_kpi_calculation_task(task)]
-
     for _, row in filtered_df.iterrows():
-        parsed = parse_all_task_statuses(row, kpi_task_columns)
+        parsed = _build_kpi_statuses_for_row(row, selected_task_columns)
         site_name = _get_site_display_name(row)
         version = _get_site_version(row)
         site_entry = {"name": site_name, "schedule_phase": get_current_schedule_phase(row)}
@@ -1128,30 +1275,29 @@ def calculate_kpis(
             if status["type"] != "string_status"
         }
 
-        all_kpi_scope_items_are_not_applicable = bool(kpi_scope_parsed) and all(
-            status["type"] == "not_applicable" for status in kpi_scope_parsed.values()
-        )
-        if all_kpi_scope_items_are_not_applicable:
-            complete_sites_by_version.setdefault(version, []).append(site_entry)
+        if not kpi_scope_parsed:
             continue
 
-        applicable_parsed = {
-            task: status
-            for task, status in kpi_scope_parsed.items()
-            if status["type"] != "not_applicable"
-        }
+        is_incomplete = False
+        for status in kpi_scope_parsed.values():
+            status_type = status.get("type")
+            if status_type == "not_applicable":
+                continue
+            if status_type == "progress":
+                if (status.get("percent") or 0) < 100:
+                    is_incomplete = True
+                    break
+                continue
+            if status_type in {"missing", "invalid_progress"}:
+                is_incomplete = True
+                break
+            is_incomplete = True
+            break
 
-        progress_items = [p for p in applicable_parsed.values() if p["type"] == "progress"]
-        applicable_tasks = list(applicable_parsed.keys())
-        has_dash_placeholder = any(str(row.get(task, "")).strip() in DASH_PLACEHOLDERS for task in applicable_tasks)
-        has_invalid_progress = any(p["type"] == "invalid_progress" for p in applicable_parsed.values())
-        has_numeric_below_100 = any((p["percent"] or 0) < 100 for p in progress_items)
-        has_all_numeric_100 = bool(progress_items) and all((p["percent"] or 0) >= 100 for p in progress_items)
-
-        if has_all_numeric_100 and not has_dash_placeholder and not has_invalid_progress:
-            complete_sites_by_version.setdefault(version, []).append(site_entry)
-        if has_numeric_below_100 or has_dash_placeholder or has_invalid_progress:
+        if is_incomplete:
             incomplete_sites_by_version.setdefault(version, []).append(site_entry)
+        else:
+            complete_sites_by_version.setdefault(version, []).append(site_entry)
 
     complete_sites_by_version = _sort_sites_by_version(complete_sites_by_version)
     incomplete_sites_by_version = _sort_sites_by_version(incomplete_sites_by_version)
@@ -1163,7 +1309,6 @@ def calculate_kpis(
             "count": displayed_sites,
             "sites_by_group": site_overview_groups,
         },
-        # Keep the legacy key for future compatibility with older downstream code.
         "Total Sites": {"count": displayed_sites},
         "Complete Sites": {
             "count": complete_count,
@@ -1175,9 +1320,10 @@ def calculate_kpis(
         },
     }
 
-# -----------------------------------------------------------------------------
-# Filtering
-# -----------------------------------------------------------------------------
+
+
+
+
 def filter_by_progress_threshold(df: pd.DataFrame, selected_task_columns: list[str], threshold: float | None) -> pd.DataFrame:
     if threshold is None:
         return df
@@ -1199,19 +1345,26 @@ def filter_by_status_level(df: pd.DataFrame, selected_task_columns: list[str], s
 def apply_filters(df: pd.DataFrame, filters: dict[str, Any], selected_task_columns: list[str]) -> pd.DataFrame:
     filtered = df.copy()
 
-    filtered = filtered[filtered["_enabled_bool"] == True]
-    filtered = filtered[filtered["_can_display"] == True]
+    filtered = filtered[filtered["_enabled_bool"] == True].copy()
+    filtered = filtered[filtered["_can_display"] == True].copy()
 
     for field in ("country", "state", "city"):
         selected = filters.get(field, [])
         if selected:
-            filtered = filtered[filtered[field].astype(str).isin(selected)]
+            filtered = filtered[filtered[field].astype(str).isin(selected)].copy()
 
-    selected_versions = filters.get("version", [])
-    if selected_versions:
-        filtered = filtered[
-            filtered.apply(lambda row: _get_site_version(row) in selected_versions, axis=1)
-        ]
+    selected_versions = list(filters.get("version", []) or [])
+    quick_version_target = str(filters.get("version_quick_target", "") or "").strip()
+    if quick_version_target:
+        if filtered.empty:
+            return filtered
+        mask = filtered.apply(lambda row: _version_matches_quick_target(_get_site_version(row), quick_version_target), axis=1)
+        filtered = filtered[mask.reindex(filtered.index, fill_value=False).astype(bool)].copy()
+    elif selected_versions:
+        selected_set = {str(version).strip() for version in selected_versions}
+        if filtered.empty:
+            return filtered
+        filtered = filtered[filtered.apply(lambda row: _get_site_version(row) in selected_set, axis=1).reindex(filtered.index, fill_value=False).astype(bool)].copy()
 
     query = str(filters.get("search", "")).strip().lower()
     if query:
@@ -1233,10 +1386,6 @@ def apply_filters(df: pd.DataFrame, filters: dict[str, Any], selected_task_colum
 
     return filtered
 
-
-# -----------------------------------------------------------------------------
-# HTML helpers
-# -----------------------------------------------------------------------------
 def _badge_html(text: str, color: str) -> str:
     safe_text = html.escape(str(text))
     color_value = STATUS_COLORS.get(color, color)
@@ -1353,10 +1502,11 @@ def build_popup_html(
     """
 
 
-# -----------------------------------------------------------------------------
-# Map rendering
-# -----------------------------------------------------------------------------
+
+
+
 class SiteStatusLegend(MacroElement):
+
     _template = Template(
         """
         {% macro script(this, kwargs) %}
@@ -1522,9 +1672,9 @@ def render_map(
 
 
 
-# -----------------------------------------------------------------------------
-# Gantt schedule rendering
-# -----------------------------------------------------------------------------
+
+
+
 def _get_schedule_column_name(columns: Any, target_name: str) -> str | None:
     return _find_case_insensitive_column(columns, target_name)
 
@@ -1582,7 +1732,16 @@ def _get_schedule_events_for_row(row: pd.Series) -> list[dict[str, Any]]:
     return events
 
 
-def _row_has_commercial_operation(row: pd.Series) -> bool:
+def _get_cod_column_name(columns: Any) -> str | None:
+    return _get_schedule_column_name(columns, COD_COLUMN_NAME)
+
+
+def _get_cod_date_for_row(row: pd.Series) -> datetime | None:
+    cod_col = _get_cod_column_name(row.index)
+    return _parse_schedule_date(row.get(cod_col, "")) if cod_col is not None else None
+
+
+def _row_has_legacy_commercial_operation(row: pd.Series) -> bool:
     cc_col = _get_schedule_column_name(row.index, CCX_START_COLUMN_NAME)
     hc_col = _get_schedule_column_name(row.index, HCX_START_COLUMN_NAME)
     return any(
@@ -1590,6 +1749,21 @@ def _row_has_commercial_operation(row: pd.Series) -> bool:
         for col in (cc_col, hc_col)
         if col is not None
     )
+
+
+def _today_start(today: datetime | None = None) -> datetime:
+    return (today or datetime.now()).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _row_has_cod_commercial_operation(row: pd.Series, today: datetime | None = None) -> bool:
+    cod_date = _get_cod_date_for_row(row)
+    if cod_date is None:
+        return False
+    return cod_date <= _today_start(today)
+
+
+def _row_has_commercial_operation(row: pd.Series, today: datetime | None = None) -> bool:
+    return _row_has_cod_commercial_operation(row, today) or _row_has_legacy_commercial_operation(row)
 
 
 def _build_schedule_segments_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1604,11 +1778,11 @@ def _build_schedule_segments_from_events(events: list[dict[str, Any]]) -> list[d
 
 
 def get_current_schedule_phase(row: pd.Series, today: datetime | None = None) -> str | None:
-    today = today or datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    if _row_has_commercial_operation(row):
+    current_day = _today_start(today)
+    if _row_has_commercial_operation(row, current_day):
         return GANTT_COMMERCIAL_OPERATION_LABEL
     for segment in _build_schedule_segments_from_events(_get_schedule_events_for_row(row)):
-        if segment["start"] <= today < segment["end"]:
+        if segment["start"] <= current_day < segment["end"]:
             return str(segment["type"])
     return None
 
@@ -1622,6 +1796,9 @@ def _all_schedule_window(df: pd.DataFrame, today: datetime) -> tuple[datetime, d
     for _, row in df.iterrows():
         for event in _get_schedule_events_for_row(row):
             all_dates.append(event["start"])
+        cod_date = _get_cod_date_for_row(row)
+        if cod_date is not None:
+            all_dates.append(cod_date)
     if not all_dates:
         return _default_gantt_window(today)
     window_start = min(all_dates)
@@ -1638,7 +1815,8 @@ def _build_gantt_rows(
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     cc_col = _get_schedule_column_name(df.columns, CCX_START_COLUMN_NAME)
     hc_col = _get_schedule_column_name(df.columns, HCX_START_COLUMN_NAME)
-    if cc_col is None and hc_col is None:
+    cod_col = _get_cod_column_name(df.columns)
+    if cc_col is None and hc_col is None and cod_col is None:
         window_start, window_end = _default_gantt_window(today)
         return [], window_start, window_end, today, False
 
@@ -1650,13 +1828,20 @@ def _build_gantt_rows(
         location_id = str(row.get("location_id", "")).strip()
         cc_raw = row.get(cc_col, "") if cc_col is not None else ""
         hc_raw = row.get(hc_col, "") if hc_col is not None else ""
+        cod_raw = row.get(cod_col, "") if cod_col is not None else ""
         cc_date = _parse_schedule_date(cc_raw) if cc_col is not None else None
         hc_date = _parse_schedule_date(hc_raw) if hc_col is not None else None
+        cod_date = _parse_schedule_date(cod_raw) if cod_col is not None else None
         raw_events = _get_schedule_events_for_row(row)
-        is_commercial = _row_has_commercial_operation(row)
+        is_legacy_commercial = _row_has_legacy_commercial_operation(row)
+        is_cod_commercial = cod_date is not None and cod_date <= today
+        is_commercial = is_cod_commercial or is_legacy_commercial
 
         segments: list[dict[str, Any]] = []
-        if is_commercial:
+
+
+
+        if is_legacy_commercial and cod_date is None:
             if not include_all_schedules:
                 continue
             segments.append(
@@ -1678,6 +1863,14 @@ def _build_gantt_rows(
             for segment in raw_segments:
                 start = segment["start"]
                 end = segment["end"]
+
+
+
+                if cod_date is not None:
+                    if start >= cod_date:
+                        continue
+                    end = min(end, cod_date)
+
                 if not include_all_schedules and start + timedelta(days=GANTT_COMPLETED_HIDE_AFTER_DAYS) < today:
                     continue
                 visible_start = max(start, window_start)
@@ -1697,9 +1890,48 @@ def _build_gantt_rows(
                         "row_top": "8px" if segment["type"] == "CCx" else "31px",
                     }
                 )
+
+            if cod_date is not None:
+
+
+
+                if window_start <= cod_date <= window_end:
+                    segments.append(
+                        {
+                            "type": "COD",
+                            "start": cod_date,
+                            "end": cod_date,
+                            "visible_start": cod_date,
+                            "visible_end": cod_date,
+                            "color": GANTT_COD_COLOR,
+                            "left": _date_pct(cod_date, window_start, window_end),
+                            "width": 0.0,
+                            "row_top": "20px",
+                            "marker": "cod",
+                        }
+                    )
+                if include_all_schedules and cod_date < window_end:
+                    visible_start = max(cod_date, window_start)
+                    visible_end = window_end
+                    if visible_end > visible_start:
+                        segments.append(
+                            {
+                                "type": GANTT_COMMERCIAL_OPERATION_LABEL,
+                                "start": cod_date,
+                                "end": window_end,
+                                "visible_start": visible_start,
+                                "visible_end": visible_end,
+                                "color": GANTT_COMMERCIAL_COLOR,
+                                "left": _date_pct(visible_start, window_start, window_end),
+                                "width": max(0.5, _date_pct(visible_end, window_start, window_end) - _date_pct(visible_start, window_start, window_end)),
+                                "row_top": "19px",
+                            }
+                        )
+
             if not segments:
                 continue
-            sort_date = min(segment["start"] for segment in segments)
+            sort_candidates = [segment["start"] for segment in segments if segment.get("start") is not None]
+            sort_date = min(sort_candidates) if sort_candidates else window_end + timedelta(days=1)
 
         rows.append(
             {
@@ -1707,11 +1939,14 @@ def _build_gantt_rows(
                 "location_id": location_id,
                 "cc_start": cc_date,
                 "hc_start": hc_date,
+                "cod": cod_date,
                 "cc_display": _format_schedule_date(cc_raw),
                 "hc_display": _format_schedule_date(hc_raw),
+                "cod_display": _format_schedule_date(cod_raw),
                 "segments": segments,
                 "sort_date": sort_date,
                 "is_commercial_operation": is_commercial,
+                "has_cod": cod_date is not None,
             }
         )
 
@@ -1727,12 +1962,10 @@ def _build_gantt_rows(
 
 
 def _format_gantt_axis_date(dt: datetime) -> str:
-    """Return compact M/D labels for the Gantt X-axis without leading zeros."""
     return f"{dt.month}/{dt.day}"
 
 
 def _get_gantt_base_tick_step_days(total_days: int) -> int:
-    """Return the default major tick step for a given schedule window."""
     if total_days <= 21:
         return 2
     if total_days <= 75:
@@ -1748,12 +1981,6 @@ def _build_gantt_axis_ticks_for_step(
     step_days: int,
     css_class: str,
 ) -> str:
-    """Build one responsive tick layer.
-
-    Multiple layers are rendered and CSS chooses the right layer by screen
-    width. This lets the Gantt chart use wider date intervals on narrow
-    screens without requiring JavaScript or a Streamlit rerun.
-    """
     ticks: list[str] = []
     cursor = window_start
     step_days = max(int(step_days), 1)
@@ -1804,6 +2031,19 @@ def _build_gantt_html(rows: list[dict[str, Any]], window_start: datetime, window
         bars = []
         for segment in item["segments"]:
             segment_type = str(segment["type"])
+            if segment.get("marker") == "cod":
+                tooltip = f"{item['location_name']} · COD · {segment['start'].strftime('%Y-%m-%d')}"
+                bars.append(
+                    "<div "
+                    "class='gantt-cod-marker' "
+                    f"title='{html.escape(tooltip)}' "
+                    f"style='left:{segment['left']:.3f}%; top:{segment['row_top']};'>"
+                    "<span class='gantt-cod-diamond'></span>"
+                    "<span class='gantt-cod-label'>COD</span>"
+                    "</div>"
+                )
+                continue
+
             is_commercial_segment = segment_type == GANTT_COMMERCIAL_OPERATION_LABEL
             bar_class = "gantt-bar-commercial" if is_commercial_segment else f"gantt-bar-{segment_type.lower()}"
             tooltip = f"{item['location_name']} · {segment_type} · {segment['start'].strftime('%Y-%m-%d')} to {segment['end'].strftime('%Y-%m-%d')}"
@@ -1825,11 +2065,14 @@ def _build_gantt_html(rows: list[dict[str, Any]], window_start: datetime, window
             "</div>"
             "</div>"
         )
+        cod_display = str(item.get('cod_display', '—') or '—')
+        cod_cell_class = "gantt-table-cell gantt-table-cod-cell" if cod_display != "—" else "gantt-table-cell"
         table_rows.append(
             f"<div class='{table_row_class}'>"
             f"<div class='gantt-table-cell gantt-table-location'>{safe_location}</div>"
             f"<div class='gantt-table-cell'>{html.escape(str(item.get('cc_display', '—') or '—'))}</div>"
             f"<div class='gantt-table-cell'>{html.escape(str(item.get('hc_display', '—') or '—'))}</div>"
+            f"<div class='{cod_cell_class}'>{html.escape(cod_display)}</div>"
             "</div>"
         )
 
@@ -1837,9 +2080,10 @@ def _build_gantt_html(rows: list[dict[str, Any]], window_start: datetime, window
     <div class='gantt-container'>
         <div class='gantt-legend-row'>
             <span class='gantt-window-label'>Window: {html.escape(window_start.strftime('%Y-%m-%d'))} to {html.escape(window_end.strftime('%Y-%m-%d'))}</span>
-            <span class='gantt-legend-group' aria-label='CCx HCx Commercial Operation legend'>
+            <span class='gantt-legend-group' aria-label='CCx HCx COD Commercial Operation legend'>
                 <span class='gantt-legend-item'><span class='gantt-legend-dot gantt-legend-ccx'></span>CCx</span>
                 <span class='gantt-legend-item'><span class='gantt-legend-dot gantt-legend-hcx'></span>HCx</span>
+                <span class='gantt-legend-item'><span class='gantt-legend-cod-diamond'></span>COD</span>
                 <span class='gantt-legend-item'><span class='gantt-legend-dot gantt-legend-co'></span>Commercial Operation</span>
             </span>
         </div>
@@ -1859,7 +2103,7 @@ def _build_gantt_html(rows: list[dict[str, Any]], window_start: datetime, window
             </div>
             <div class='gantt-table-panel'>
                 <div class='gantt-table'>
-                    <div class='gantt-table-header'><div>Location</div><div>CCx Start</div><div>HCx Start</div></div>
+                    <div class='gantt-table-header'><div>Location</div><div>CCx Start</div><div>HCx Start</div><div>COD</div></div>
                     <div class='gantt-table-body'>{''.join(table_rows)}</div>
                 </div>
             </div>
@@ -1878,16 +2122,17 @@ def render_gantt_chart_section(df: pd.DataFrame) -> None:
     if not rows:
         cc_col = _get_schedule_column_name(df.columns, CCX_START_COLUMN_NAME)
         hc_col = _get_schedule_column_name(df.columns, HCX_START_COLUMN_NAME)
-        if cc_col is None and hc_col is None:
-            st.info("No `CCx Start` or `HCx Start` columns were found in the active CSV.")
+        cod_col = _get_cod_column_name(df.columns)
+        if cc_col is None and hc_col is None and cod_col is None:
+            st.info("No `CCx Start`, `HCx Start`, or `COD` columns were found in the active CSV.")
         else:
-            st.info("No CCx/HCx schedule rows fall within the current Gantt display window.")
+            st.info("No CCx/HCx/COD schedule rows fall within the current Gantt display window.")
         return
     render_safe_html(_build_gantt_html(rows, window_start, window_end, today, include_all_schedules))
 
-# -----------------------------------------------------------------------------
-# UI rendering
-# -----------------------------------------------------------------------------
+
+
+
 def render_floating_task_selector_css() -> None:
     st.markdown(
         """
@@ -2284,6 +2529,15 @@ def render_floating_task_selector_css() -> None:
         .gantt-legend-ccx {{ background: {GANTT_CCX_COLOR}; }}
         .gantt-legend-hcx {{ background: {GANTT_HCX_COLOR}; }}
         .gantt-legend-co {{ background: {GANTT_COMMERCIAL_COLOR}; }}
+        .gantt-legend-cod-diamond {{
+            width: 0.72rem;
+            height: 0.72rem;
+            display: inline-block;
+            background: {GANTT_COD_COLOR};
+            border: 1px solid rgba(17,24,39,0.35);
+            transform: rotate(45deg);
+            margin-right: 0.1rem;
+        }}
         .gantt-layout {{
             display: grid;
             grid-template-columns: minmax(0, 1fr) minmax(250px, 0.28fr);
@@ -2470,6 +2724,40 @@ def render_floating_task_selector_css() -> None:
             color:#111827 !important;
             text-shadow: none;
         }}
+        .gantt-cod-marker {{
+            position: absolute;
+            z-index: 8;
+            transform: translateX(-50%);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.22rem;
+            pointer-events: auto;
+            white-space: nowrap;
+        }}
+        .gantt-cod-diamond {{
+            width: 13px;
+            height: 13px;
+            display: inline-block;
+            background: {GANTT_COD_COLOR};
+            border: 2px solid #ffffff;
+            transform: rotate(45deg);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+            flex: 0 0 auto;
+        }}
+        .gantt-cod-label {{
+            color: #111827;
+            background: #fffbeb;
+            border: 1px solid rgba(180,83,9,0.45);
+            border-radius: 999px;
+            padding: 0.04rem 0.32rem;
+            font-size: 0.66rem;
+            font-weight: 900;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.20);
+        }}
+        .gantt-table-cod-cell {{
+            color: #7c2d12 !important;
+            font-weight: 900 !important;
+        }}
         .gantt-table-panel {{
             display: block;
             background:#ffffff;
@@ -2488,7 +2776,7 @@ def render_floating_task_selector_css() -> None:
         }}
         .gantt-table-header {{
             display: grid;
-            grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+            grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.85fr) minmax(0, 0.85fr) minmax(0, 0.75fr);
             min-height: 42px;
             align-items: end;
             border-bottom: 1px solid #94a3b8;
@@ -2507,7 +2795,7 @@ def render_floating_task_selector_css() -> None:
         }}
         .gantt-table-row {{
             display: grid;
-            grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+            grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.85fr) minmax(0, 0.85fr) minmax(0, 0.75fr);
             min-height: 60px;
             height: 60px;
             border-bottom: 1px solid #e2e8f0;
@@ -2685,36 +2973,46 @@ def render_task_config_summary(all_task_columns: list[str], visible_task_columns
 
 
 def render_version_quick_filter(df: pd.DataFrame) -> None:
-    """Render top-of-sidebar quick filters for common product versions."""
     version_options = get_version_filter_options(df)
     if not version_options:
+        st.session_state["filter_version_quick_target"] = "All"
         return
 
     quick_targets = _get_quick_version_targets(version_options)
+    if not quick_targets:
+        st.session_state["filter_version_quick_target"] = "All"
+        return
+
+    options = ["All"] + quick_targets
+    current = str(st.session_state.get("filter_version_quick_target", "All") or "All")
+    if current not in options:
+        current = "All"
+        st.session_state["filter_version_quick_target"] = "All"
+
     st.sidebar.subheader("Version Quick Filter")
+    cols = st.sidebar.columns(len(options))
+    for col, option in zip(cols, options):
+        is_active = option == current
+        button_label = f"✓ {option}" if is_active else option
+        button_type = "primary" if is_active else "secondary"
+        if col.button(button_label, key=f"version_quick_button__{option}", use_container_width=True, type=button_type):
+            st.session_state["filter_version_quick_target"] = option
+            st.session_state["filter_version"] = []
+            st.rerun()
 
-    button_labels = ["All"] + quick_targets
-    columns = st.sidebar.columns(len(button_labels))
-    for col, label in zip(columns, button_labels):
-        with col:
-            if st.button(label, use_container_width=True, key=f"version_quick_filter__{label}"):
-                if label == "All":
-                    st.session_state["filter_version"] = []
-                else:
-                    matched_versions = [
-                        option for option in version_options if _version_matches_quick_target(option, label)
-                    ]
-                    st.session_state["filter_version"] = matched_versions
-                st.rerun()
-
-    selected_versions = st.session_state.get("filter_version", [])
-    if selected_versions:
-        selected_text = ", ".join(str(version) for version in selected_versions)
-        st.sidebar.caption(f"Current Version filter: {selected_text}")
+    selected = str(st.session_state.get("filter_version_quick_target", "All") or "All")
+    if selected != "All":
+        matched_versions = [option for option in version_options if _version_matches_quick_target(option, selected)]
+        selected_text = ", ".join(str(version) for version in matched_versions) if matched_versions else "No matching version"
+        st.sidebar.caption(f"Current Version filter: {selected} → {selected_text}")
     else:
-        st.sidebar.caption("Current Version filter: All")
+        manual_versions = st.session_state.get("filter_version", [])
+        if manual_versions:
+            selected_text = ", ".join(str(version) for version in manual_versions)
+            st.sidebar.caption(f"Current Version filter: {selected_text}")
+        else:
+            st.sidebar.caption("Current Version filter: All")
     st.sidebar.divider()
-
 
 def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[str, Any]:
     st.sidebar.header("Filters")
@@ -2724,6 +3022,7 @@ def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[st
             "filter_state",
             "filter_city",
             "filter_version",
+            "filter_version_quick_target",
             "filter_search",
             "filter_status_levels",
             "filter_data_issue_only",
@@ -2741,7 +3040,12 @@ def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[st
     state = st.sidebar.multiselect("State", unique_options("state"), key="filter_state")
     city = st.sidebar.multiselect("City", unique_options("city"), key="filter_city")
     version_options = get_version_filter_options(df)
+    quick_selection = str(st.session_state.get("filter_version_quick_target", "All") or "All")
+    quick_target = "" if quick_selection == "All" else quick_selection
     version = st.sidebar.multiselect("Version", version_options, key="filter_version") if version_options else []
+    if quick_target:
+        version = []
+        st.sidebar.caption("Manual Version filter is ignored while Version Quick Filter is active.")
     search = st.sidebar.text_input("Search location_id / location_name / city", key="filter_search")
 
     status_levels = st.sidebar.multiselect(
@@ -2756,11 +3060,11 @@ def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[st
         "state": state,
         "city": city,
         "version": version,
+        "version_quick_target": quick_target,
         "search": search,
         "status_levels": status_levels,
         "data_issue_only": data_issue_only,
     }
-
 
 def render_safe_html(html_content: str) -> None:
     if hasattr(st, "html"):
@@ -3053,9 +3357,9 @@ def render_download_buttons(filtered_table: pd.DataFrame, issue_df: pd.DataFrame
     )
 
 
-# -----------------------------------------------------------------------------
-# Main app
-# -----------------------------------------------------------------------------
+
+
+
 def main() -> None:
     render_floating_task_selector_css()
     st.title("Site Work Status Map Dashboard")
@@ -3109,7 +3413,8 @@ def main() -> None:
     }
 
     filtered_df = apply_filters(validated_df, filters, selected_task_columns)
-    kpis = calculate_kpis(validated_df, filtered_df, selected_task_columns, validation_issues)
+    kpi_task_columns = selected_task_columns if selected_task_columns else task_columns
+    kpis = calculate_kpis(validated_df, filtered_df, kpi_task_columns, validation_issues)
 
     updated_date_display = get_updated_date_display(validated_df)
     render_dashboard_meta_header(source_name, updated_date_display, len(filtered_df))
