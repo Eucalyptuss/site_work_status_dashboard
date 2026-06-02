@@ -1,4 +1,4 @@
-﻿location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,updated_date,CCx Start,HCx Start,COD,Butterfly V/V,Wiring Separation,Sol. V/V Oring,Check Water Pump Leak,Chiller Louver,F/W Update,Chiller#1 F/W Version,Chiller#2 F/W Version,HVAC F/W Version,Version,QTY,Note
+﻿location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,updated_date,CCx Start,HCx Start,COD,Butterfly Ball V/V,Wiring Separation,Sol. V/V Oring,Check Water Pump Leak,Chiller Louver,F/W Update,Chiller#1 F/W Version,Chiller#2 F/W Version,HVAC F/W Version,Version,QTY,Note
 FL001,KAYAK,US,FL,Holt,30.6979877,-86.70955599,America/Chicago,Y,2026-06-02,Commercial operation,Commercial operation,N/A,N/A,N/A,N/A,N/A,N/A,66/66,1.1.01,1.1.01,1.1.01,1.0,66,-
 FL002,CHIPOLA RIVER,US,FL,Altha,30.44839151,-85.2846281,America/Chicago,Y,2026-06-02,Commercial operation,Commercial operation,N/A,N/A,N/A,N/A,N/A,N/A,66/66,1.1.01,1.1.01,1.1.01,1.0,66,-
 FL003,FOURMILE,US,FL,Altha,30.44839153,-85.2846281,America/Chicago,Y,2026-06-02,Commercial operation,Commercial operation,N/A,N/A,N/A,N/A,N/A,N/A,66/66,1.1.01,1.1.01,1.1.01,1.0,66,-
