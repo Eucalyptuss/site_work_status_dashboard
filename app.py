@@ -50,9 +50,11 @@ DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
 SITE_METADATA_COLUMNS = {"version", "updated_date"}
 UPDATED_DATE_COLUMN_NAME = "updated_date"
 UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-dashboard_ver = "v1.36"
+dashboard_ver = "v1.47"
 DEFAULT_TASK_CONFIG_FILENAME = "task_config.csv"
 TASK_CONFIG_COLUMNS = ["task_name", "visible", "category", "display_order", "description"]
+DEFAULT_SITE_PEOPLE_FILENAME = "site_people.csv"
+SITE_PEOPLE_COLUMNS = ["Name", "Team", "Location", "Contact Information", "Note"]
 
 CCX_START_COLUMN_NAME = "CCx Start"
 HCX_START_COLUMN_NAME = "HCx Start"
@@ -114,6 +116,27 @@ STRING_STATUS_PALETTE = [
     "#f4511e",
 ]
 
+PERSON_BADGE_PALETTE = [
+    {"background": "#2563eb", "border": "#bfdbfe", "color": "#ffffff"},
+    {"background": "#0f766e", "border": "#99f6e4", "color": "#ffffff"},
+    {"background": "#7c3aed", "border": "#ddd6fe", "color": "#ffffff"},
+    {"background": "#ca8a04", "border": "#fef08a", "color": "#111827"},
+    {"background": "#166534", "border": "#bbf7d0", "color": "#ffffff"},
+    {"background": "#0891b2", "border": "#a5f3fc", "color": "#ffffff"},
+    {"background": "#a21caf", "border": "#f5d0fe", "color": "#ffffff"},
+    {"background": "#4d7c0f", "border": "#d9f99d", "color": "#ffffff"},
+    {"background": "#4338ca", "border": "#c7d2fe", "color": "#ffffff"},
+    {"background": "#0e7490", "border": "#cffafe", "color": "#ffffff"},
+    {"background": "#9333ea", "border": "#e9d5ff", "color": "#ffffff"},
+    {"background": "#be185d", "border": "#fbcfe8", "color": "#ffffff"},
+    {"background": "#334155", "border": "#cbd5e1", "color": "#ffffff"},
+    {"background": "#047857", "border": "#a7f3d0", "color": "#ffffff"},
+    {"background": "#1e40af", "border": "#bfdbfe", "color": "#ffffff"},
+    {"background": "#6b21a8", "border": "#e9d5ff", "color": "#ffffff"},
+    {"background": "#854d0e", "border": "#fde68a", "color": "#ffffff"},
+    {"background": "#155e75", "border": "#bae6fd", "color": "#ffffff"},
+]
+
 SAMPLE_CSV = """location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,Version,updated_date,CCx Start,HCx Start,COD,F/W Update,Valve1,Valve2,Water Pump,Chiller#1 F/W Version,Chiller#2 F/W Version,HVAC F/W Version,Note
 FL001,BLACKWATER RIVER,US,FL,Milton,30.6,-86.9,America/Chicago,Y,1.5,2026-05-30,2026-05-01,2026-05-15,2026-05-29,3/3,60/66,N/A,10/66,3.0.0.0,3.0.0.0,3.0.0.1,Pending COD review
 FL002,CANOE,US,FL,Holt,30.6,-86.7,America/Chicago,Y,1.5,2026-05-30,2026-05-08,2026-05-22,#N/A,1/3,20/183,183/183,183/183,3.0.0.2,3.0.0.2,3.0.0.6,Active schedule
@@ -135,6 +158,13 @@ HVAC F/W Version,Y,Information,60,Firmware version information; completion follo
 Note,Y,Information,999,Free text notes; excluded from KPI completion counts
 """
 
+SAMPLE_SITE_PEOPLE_CSV = """Name,Team,Location,Contact Information,Note
+John Smith,US Service,FL001;jay,john.smith@example.com,Primary engineer for multiple sites
+Park Minsoo,KR Support,CANOE,park.minsoo@example.com,Business traveler
+David Kim,US Service,CARTWHEEL|BLACKWATER RIVER,david.kim@example.com,Remote support contact for multiple sites
+Inactive Person,US Service,-,inactive.person@example.com,Hidden because Location is dash
+"""
+
 
 
 
@@ -149,6 +179,10 @@ def create_sample_csv() -> bytes:
 
 def create_sample_task_config_csv() -> bytes:
     return SAMPLE_TASK_CONFIG_CSV.encode("utf-8-sig")
+
+
+def create_sample_site_people_csv() -> bytes:
+    return SAMPLE_SITE_PEOPLE_CSV.encode("utf-8-sig")
 
 
 @st.cache_data(show_spinner=False)
@@ -194,6 +228,22 @@ def load_task_config(uploaded_file: Any | None) -> pd.DataFrame:
         if default_bytes is None:
             return pd.DataFrame(columns=TASK_CONFIG_COLUMNS)
         return _load_csv_bytes(default_bytes, DEFAULT_TASK_CONFIG_FILENAME)
+    return _load_csv_bytes(uploaded_file.getvalue(), uploaded_file.name)
+
+
+def get_default_site_people_csv() -> bytes | None:
+    default_path = Path(__file__).with_name(DEFAULT_SITE_PEOPLE_FILENAME)
+    if default_path.exists():
+        return default_path.read_bytes()
+    return None
+
+
+def load_site_people(uploaded_file: Any | None) -> pd.DataFrame:
+    if uploaded_file is None:
+        default_bytes = get_default_site_people_csv()
+        if default_bytes is None:
+            return pd.DataFrame(columns=SITE_PEOPLE_COLUMNS)
+        return _load_csv_bytes(default_bytes, DEFAULT_SITE_PEOPLE_FILENAME)
     return _load_csv_bytes(uploaded_file.getvalue(), uploaded_file.name)
 
 
@@ -1323,6 +1373,327 @@ def calculate_kpis(
 
 
 
+def _get_people_column(people_df: pd.DataFrame, candidates: list[str]) -> str | None:
+    return _find_column_by_canonical_names(people_df.columns, candidates)
+
+
+def _is_people_location_hidden_value(value: Any) -> bool:
+    if value is None or pd.isna(value):
+        return True
+    text = str(value).strip()
+    if not text:
+        return True
+    if text in DASH_PLACEHOLDERS:
+        return True
+    lowered = text.lower()
+    return lowered in NA_VALUES or lowered in VALID_FALSE
+
+
+def _build_site_location_lookup(site_df: pd.DataFrame) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for _, row in site_df.iterrows():
+        location_id = str(row.get("location_id", "")).strip()
+        location_name = str(row.get("location_name", "")).strip()
+        if location_id:
+            lookup.setdefault(_canonical_name(location_id), location_id)
+        if location_name:
+            lookup.setdefault(_canonical_name(location_name), location_id)
+    return lookup
+
+
+def _empty_site_people_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "Name",
+            "Team",
+            "Location",
+            "Contact Information",
+            "Note",
+            "_visible_bool",
+            "_matched_location_id",
+            "_matched_location_name",
+            "_matched_bool",
+            "_source_location",
+            "_location_token",
+            "_source_row_index",
+            "_site_people_order",
+            "_person_key",
+            "_assignment_key",
+        ]
+    )
+
+
+def _split_people_locations(value: Any) -> list[str]:
+    text = "" if value is None or pd.isna(value) else str(value).strip()
+    if not text:
+        return []
+    parts = [part.strip() for part in re.split(r"\s*(?:;|\||,|\n|\r)+\s*", text) if part.strip()]
+    return parts or [text]
+
+
+def _people_person_key(name: str, team: str, contact: str) -> str:
+    contact_key = str(contact).strip().casefold()
+    if contact_key:
+        return f"contact:{contact_key}"
+    return f"name:{_canonical_name(name)}|team:{_canonical_name(team)}"
+
+
+def prepare_site_people(
+    people_df: pd.DataFrame,
+    site_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    issues: list[dict[str, Any]] = []
+    if people_df is None or people_df.empty:
+        return _empty_site_people_df(), issues
+
+    name_col = _get_people_column(people_df, ["Name", "Person Name", "person_name", "이름"])
+    team_col = _get_people_column(people_df, ["Team", "팀"])
+    location_col = _get_people_column(people_df, ["Location", "Locations", "Site", "Sites", "Site ID", "Site IDs", "Site Name", "Site Names", "location_id", "location_name", "위치", "사이트"])
+    contact_col = _get_people_column(people_df, ["Contact Information", "Contact", "Email", "Mail", "Email Address", "메일", "연락처"])
+    note_col = _get_people_column(people_df, ["Note", "Notes", "Memo", "메모"])
+
+    required_map = {
+        "Name": name_col,
+        "Team": team_col,
+        "Location": location_col,
+        "Contact Information": contact_col,
+        "Note": note_col,
+    }
+    for required_name, actual_col in required_map.items():
+        if actual_col is None:
+            _add_issue(issues, None, "", f"site_people.{required_name}", "", f"site_people.csv is missing column '{required_name}'.", "WARNING")
+
+    site_lookup = _build_site_location_lookup(site_df)
+    id_to_name = {str(row.get("location_id", "")).strip(): str(row.get("location_name", "")).strip() for _, row in site_df.iterrows()}
+    rows: list[dict[str, Any]] = []
+    email_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+    for idx, row in people_df.iterrows():
+        name = str(row.get(name_col, "") if name_col is not None else "").strip()
+        team = str(row.get(team_col, "") if team_col is not None else "").strip() or "No Team"
+        source_location = str(row.get(location_col, "") if location_col is not None else "").strip()
+        contact = str(row.get(contact_col, "") if contact_col is not None else "").strip()
+        note = str(row.get(note_col, "") if note_col is not None else "").strip()
+        location_tokens = _split_people_locations(source_location)
+        person_key = _people_person_key(name, team, contact)
+        visible_tokens = [token for token in location_tokens if not _is_people_location_hidden_value(token)]
+        visible = bool(visible_tokens)
+
+        if visible and not name:
+            _add_issue(issues, int(idx), "", "site_people.Name", name, "Person row with assigned Location is missing Name.", "WARNING")
+        if visible and contact and not email_re.match(contact):
+            _add_issue(issues, int(idx), "", "site_people.Contact Information", contact, "Contact Information should be an email address.", "INFO")
+
+        if not visible_tokens:
+            rows.append(
+                {
+                    "Name": name,
+                    "Team": team,
+                    "Location": source_location,
+                    "Contact Information": contact,
+                    "Note": note,
+                    "_visible_bool": False,
+                    "_matched_location_id": "",
+                    "_matched_location_name": "",
+                    "_matched_bool": False,
+                    "_source_location": source_location,
+                    "_location_token": source_location,
+                    "_source_row_index": int(idx),
+                    "_site_people_order": int(idx),
+                    "_person_key": person_key,
+                    "_assignment_key": f"{person_key}|hidden:{_canonical_name(source_location)}",
+                }
+            )
+            continue
+
+        seen_location_ids_for_row: set[str] = set()
+        for location_token in visible_tokens:
+            matched_location_id = site_lookup.get(_canonical_name(location_token), "") if location_token else ""
+            matched_location_name = id_to_name.get(matched_location_id, "") if matched_location_id else ""
+
+            if location_token and not matched_location_id:
+                _add_issue(issues, int(idx), "", "site_people.Location", location_token, "Location does not match any enabled site location_id or location_name.", "WARNING")
+
+            if matched_location_id and matched_location_id in seen_location_ids_for_row:
+                continue
+            if matched_location_id:
+                seen_location_ids_for_row.add(matched_location_id)
+
+            rows.append(
+                {
+                    "Name": name,
+                    "Team": team,
+                    "Location": location_token,
+                    "Contact Information": contact,
+                    "Note": note,
+                    "_visible_bool": bool(matched_location_id),
+                    "_matched_location_id": matched_location_id,
+                    "_matched_location_name": matched_location_name,
+                    "_matched_bool": bool(matched_location_id),
+                    "_source_location": source_location,
+                    "_location_token": location_token,
+                    "_source_row_index": int(idx),
+                    "_site_people_order": int(idx),
+                    "_person_key": person_key,
+                    "_assignment_key": f"{person_key}|site:{matched_location_id}" if matched_location_id else f"{person_key}|unmatched:{_canonical_name(location_token)}",
+                }
+            )
+
+    if not rows:
+        return _empty_site_people_df(), issues
+    return pd.DataFrame(rows), issues
+
+
+def get_people_filter_options(site_people_df: pd.DataFrame) -> dict[str, list[str]]:
+    if site_people_df.empty:
+        return {"team": []}
+    active = site_people_df[(site_people_df["_visible_bool"] == True) & (site_people_df["_matched_bool"] == True)].copy()
+    if active.empty:
+        return {"team": []}
+    active = active.drop_duplicates(subset=["_person_key"])
+    teams = sorted([x for x in active["Team"].dropna().astype(str).unique().tolist() if x.strip()], key=lambda x: str(x).casefold())
+    return {"team": teams}
+
+
+def filter_site_people(site_people_df: pd.DataFrame, filters: dict[str, Any]) -> pd.DataFrame:
+    if site_people_df.empty:
+        return site_people_df.copy()
+    filtered = site_people_df.copy()
+    if not filters.get("people_show_assigned", True):
+        return filtered.iloc[0:0].copy()
+    filtered = filtered[(filtered["_visible_bool"] == True) & (filtered["_matched_bool"] == True)].copy()
+    selected_teams = list(filters.get("people_team", []) or [])
+    if selected_teams:
+        filtered = filtered[filtered["Team"].astype(str).isin(selected_teams)].copy()
+    query = str(filters.get("people_search", "") or "").strip().lower()
+    if query:
+        haystack = (
+            filtered["Name"].astype(str)
+            + " "
+            + filtered["Team"].astype(str)
+            + " "
+            + filtered["Contact Information"].astype(str)
+            + " "
+            + filtered["Location"].astype(str)
+            + " "
+            + filtered["_source_location"].astype(str)
+            + " "
+            + filtered["_matched_location_id"].astype(str)
+            + " "
+            + filtered["_matched_location_name"].astype(str)
+        ).str.lower()
+        filtered = filtered[haystack.str.contains(re.escape(query), na=False)].copy()
+    return filtered
+
+
+def build_people_by_location(site_people_df: pd.DataFrame) -> dict[str, list[dict[str, Any]]]:
+    people_by_location: dict[str, list[dict[str, Any]]] = {}
+    if site_people_df.empty:
+        return people_by_location
+    deduped = site_people_df.drop_duplicates(subset=["_matched_location_id", "_person_key"]).copy()
+    for _, row in deduped.iterrows():
+        location_id = str(row.get("_matched_location_id", "")).strip()
+        if not location_id:
+            continue
+        entry = {
+            "name": str(row.get("Name", "")).strip(),
+            "team": str(row.get("Team", "")).strip(),
+            "contact": str(row.get("Contact Information", "")).strip(),
+            "note": str(row.get("Note", "")).strip(),
+            "location": str(row.get("Location", "")).strip(),
+            "source_location": str(row.get("_source_location", "")).strip(),
+            "person_key": str(row.get("_person_key", "")).strip(),
+            "source_row_index": int(row.get("_source_row_index", 0)) if str(row.get("_source_row_index", "")).strip() else 0,
+            "site_people_order": int(row.get("_site_people_order", row.get("_source_row_index", 0))) if str(row.get("_site_people_order", row.get("_source_row_index", ""))).strip() else 0,
+        }
+        people_by_location.setdefault(location_id, []).append(entry)
+    for location_id, entries in people_by_location.items():
+        entries.sort(key=lambda item: (int(item.get("site_people_order", 0)), str(item.get("name", "")).casefold(), str(item.get("person_key", ""))))
+    return people_by_location
+
+
+def get_people_for_site(row: pd.Series, people_by_location: dict[str, list[dict[str, Any]]] | None) -> list[dict[str, Any]]:
+    if not people_by_location:
+        return []
+    location_id = str(row.get("location_id", "")).strip()
+    return list(people_by_location.get(location_id, []))
+
+
+def calculate_people_kpis(filtered_df: pd.DataFrame, filtered_people_df: pd.DataFrame) -> dict[str, Any]:
+    active_people = filtered_people_df.copy() if filtered_people_df is not None else pd.DataFrame()
+    if active_people.empty or filtered_df.empty:
+        return {
+            "Team Overview": {"count": 0, "team_counts": {}},
+            "On-Site Staff": {"count": 0, "site_people": []},
+        }
+
+    site_lookup: dict[str, dict[str, str]] = {}
+    for _, site_row in filtered_df.iterrows():
+        location_id = str(site_row.get("location_id", "")).strip()
+        if not location_id:
+            continue
+        location_name = str(site_row.get("location_name", "")).strip()
+        site_lookup[location_id] = {
+            "location_id": location_id,
+            "location_name": location_name if location_name else location_id,
+        }
+
+    filtered_site_ids = set(site_lookup.keys())
+    active_people = active_people[active_people["_matched_location_id"].astype(str).isin(filtered_site_ids)].copy()
+    if active_people.empty:
+        return {
+            "Team Overview": {"count": 0, "team_counts": {}},
+            "On-Site Staff": {"count": 0, "site_people": []},
+        }
+
+    person_color_index_map = _build_person_color_index_map(active_people)
+    unique_people = active_people.drop_duplicates(subset=["_person_key"]).copy()
+    team_counts: dict[str, int] = {}
+    if not unique_people.empty:
+        team_order_rows = unique_people.copy()
+        team_order_rows["_team_sort_order"] = pd.to_numeric(team_order_rows.get("_site_people_order", team_order_rows.get("_source_row_index", 0)), errors="coerce").fillna(0).astype(int)
+        team_summary = (
+            team_order_rows.groupby("Team", sort=False)
+            .agg(_person_count=("_person_key", "nunique"), _first_order=("_team_sort_order", "min"))
+            .reset_index()
+            .sort_values(["_first_order", "Team"], key=lambda col: col.astype(str).str.casefold() if col.name == "Team" else col)
+        )
+        team_counts = {str(row["Team"]): int(row["_person_count"]) for _, row in team_summary.iterrows()}
+    site_rows: list[dict[str, Any]] = []
+    for location_id, group in active_people.groupby("_matched_location_id"):
+        location_id_text = str(location_id).strip()
+        group = group.drop_duplicates(subset=["_person_key"]).copy()
+        people_entries: list[dict[str, str]] = []
+        for _, person_row in group.iterrows():
+            person_name = str(person_row.get("Name", "")).strip()
+            if not person_name:
+                continue
+            people_entries.append(
+                {
+                    "name": person_name,
+                    "person_key": str(person_row.get("_person_key", "")).strip() or person_name,
+                    "color_index": person_color_index_map.get(str(person_row.get("_person_key", "")).strip(), 0),
+                    "source_row_index": int(person_row.get("_source_row_index", 0)) if str(person_row.get("_source_row_index", "")).strip() else 0,
+                    "site_people_order": int(person_row.get("_site_people_order", person_row.get("_source_row_index", 0))) if str(person_row.get("_site_people_order", person_row.get("_source_row_index", ""))).strip() else 0,
+                }
+            )
+        people_entries.sort(key=lambda item: (int(item.get("site_people_order", 0)), str(item.get("name", "")).casefold(), str(item.get("person_key", ""))))
+        site_info = site_lookup.get(location_id_text, {"location_id": location_id_text, "location_name": location_id_text})
+        site_rows.append(
+            {
+                "location_id": location_id_text,
+                "location_name": site_info.get("location_name", location_id_text),
+                "count": len(people_entries),
+                "names": [str(person.get("name", "")).strip() for person in people_entries if str(person.get("name", "")).strip()],
+                "people": people_entries,
+            }
+        )
+    site_rows.sort(key=lambda item: (str(item.get("location_name", "")).casefold(), str(item.get("location_id", ""))))
+    return {
+        "Team Overview": {"count": len(team_counts), "team_counts": team_counts},
+        "On-Site Staff": {"count": len(unique_people), "site_people": site_rows},
+    }
+
 
 def filter_by_progress_threshold(df: pd.DataFrame, selected_task_columns: list[str], threshold: float | None) -> pd.DataFrame:
     if threshold is None:
@@ -1401,15 +1772,20 @@ def _status_badge_for_parsed(parsed: dict[str, Any], color_map: dict[str, str] |
     return _badge_html(parsed["display_text"], parsed["color"])
 
 
-def build_site_label_html(row: pd.Series, selected_task_columns: list[str], show_labels: bool = True) -> str:
+def build_site_label_html(row: pd.Series, selected_task_columns: list[str], show_labels: bool = True, people_by_location: dict[str, list[dict[str, Any]]] | None = None) -> str:
     if not show_labels:
         return ""
     site_name = html.escape(str(row.get("location_name", "")))
     location_id = html.escape(str(row.get("location_id", "")))
     site_version = _get_site_version(row)
+    people_for_site = get_people_for_site(row, people_by_location)
+    people_count_html = ""
+    if people_for_site:
+        people_count_html = f"<div class='site-people-badge' style='margin:2px 0 3px 0; display:inline-block; background:#e0f2fe; border:1px solid #38bdf8; color:#0f172a; border-radius:999px; padding:1px 7px; font-size:10px; font-weight:900;'>👥 {len(people_for_site)}</div>"
     lines = [
         f"<div style='font-weight:800; margin-bottom:2px; color:#111827;'>{site_name}</div>",
         f"<div class='site-version-row' style='margin:2px 0 3px 0;'>{_version_badge_html(site_version)}</div>",
+        people_count_html,
     ]
     if len(selected_task_columns) == 1:
         task = selected_task_columns[0]
@@ -1451,6 +1827,7 @@ def build_popup_html(
     task_columns: list[str],
     selected_task_columns: list[str] | None = None,
     show_all_tasks: bool = False,
+    people_by_location: dict[str, list[dict[str, Any]]] | None = None,
 ) -> str:
     selected = task_columns if selected_task_columns is None else selected_task_columns
     site_name = html.escape(str(row.get("location_name", "")))
@@ -1482,10 +1859,11 @@ def build_popup_html(
     if not rows:
         rows.append("<tr><td colspan='2' style='padding:7px; color:#6b7280;'>No work item selected.</td></tr>")
 
-    warning = ""
-    summary = calculate_site_summary_for_selected_tasks(row, selected)
-    if summary["has_warning_indicator"]:
-        warning = "<div style='margin-top:7px; color:#92400e; font-size:12px; font-weight:700;'>⚠ Data issue exists for selected tasks.</div>"
+    people_for_site = get_people_for_site(row, people_by_location)
+    people_html = ""
+    if people_for_site:
+        people_names = "".join(f"<li>{html.escape(person.get('name', ''))}</li>" for person in people_for_site if person.get('name'))
+        people_html = f"<div style='margin-top:9px; padding-top:7px; border-top:1px solid #d1d5db;'><div style='font-weight:800; font-size:12px; color:#111827; margin-bottom:3px;'>Assigned Staff</div><ul style='margin:0; padding-left:17px; font-size:12px; color:#111827;'>{people_names}</ul></div>"
 
     return f"""
     <div style="font-family:Arial, sans-serif; width:320px; color:#111827;">
@@ -1497,7 +1875,7 @@ def build_popup_html(
         </thead>
         <tbody>{''.join(rows)}</tbody>
       </table>
-      {warning}
+      {people_html}
     </div>
     """
 
@@ -1511,14 +1889,46 @@ class SiteStatusLegend(MacroElement):
         """
         {% macro script(this, kwargs) %}
         var {{ this.get_name() }} = L.control({position: 'bottomleft'});
+        var {{ this.get_name() }}_legendDiv = null;
         {{ this.get_name() }}.onAdd = function (map) {
             var div = L.DomUtil.create('div', 'site-status-map-legend leaflet-control');
             div.innerHTML = {{ this.legend_html|tojson }};
             L.DomEvent.disableClickPropagation(div);
             L.DomEvent.disableScrollPropagation(div);
+            {{ this.get_name() }}_legendDiv = div;
             return div;
         };
         {{ this.get_name() }}.addTo({{ this._parent.get_name() }});
+        var {{ this.get_name() }}_style = document.createElement('style');
+        {{ this.get_name() }}_style.innerHTML = `
+            .site-status-map-legend {
+                opacity: 1;
+                transition: opacity 160ms ease, filter 160ms ease;
+                z-index: 650 !important;
+            }
+            .site-status-map-legend.site-status-map-legend-dim {
+                opacity: 0.28;
+                filter: saturate(0.8);
+            }
+            .site-status-map-legend.site-status-map-legend-dim:hover {
+                opacity: 0.96;
+                filter: none;
+            }
+            .leaflet-popup-pane {
+                z-index: 700 !important;
+            }
+        `;
+        document.head.appendChild({{ this.get_name() }}_style);
+        {{ this._parent.get_name() }}.on('popupopen', function () {
+            if ({{ this.get_name() }}_legendDiv) {
+                {{ this.get_name() }}_legendDiv.classList.add('site-status-map-legend-dim');
+            }
+        });
+        {{ this._parent.get_name() }}.on('popupclose', function () {
+            if ({{ this.get_name() }}_legendDiv) {
+                {{ this.get_name() }}_legendDiv.classList.remove('site-status-map-legend-dim');
+            }
+        });
         {% endmacro %}
         """
     )
@@ -1559,8 +1969,8 @@ def add_legend_to_map(map_obj: folium.Map) -> None:
 
 
 
-def build_site_marker_icon_html(row: pd.Series, selected_task_columns: list[str], color: str) -> str:
-    label_html = build_site_label_html(row, selected_task_columns, show_labels=True)
+def build_site_marker_icon_html(row: pd.Series, selected_task_columns: list[str], color: str, people_by_location: dict[str, list[dict[str, Any]]] | None = None) -> str:
+    label_html = build_site_label_html(row, selected_task_columns, show_labels=True, people_by_location=people_by_location)
     safe_color = html.escape(str(color))
     return f"""
     <div style="width:240px; text-align:center; pointer-events:auto;">
@@ -1575,6 +1985,7 @@ def create_folium_map(
     selected_task_columns: list[str],
     filters: dict[str, Any],
     options: dict[str, Any],
+    people_by_location: dict[str, list[dict[str, Any]]] | None = None,
 ) -> folium.Map:
     if df.empty:
         return folium.Map(location=[39.5, -98.35], zoom_start=4, tiles="CartoDB positron")
@@ -1608,10 +2019,10 @@ def create_folium_map(
         color_key = get_marker_color_for_selected_tasks(row, selected_task_columns)
         color = STATUS_COLORS.get(color_key, STATUS_COLORS["gray"])
         tooltip = build_tooltip_text(row, selected_task_columns)
-        popup_html = build_popup_html(row, task_columns, selected_task_columns, show_all_tasks=show_all_tasks)
+        popup_html = build_popup_html(row, task_columns, selected_task_columns, show_all_tasks=show_all_tasks, people_by_location=people_by_location)
         popup = folium.Popup(popup_html, max_width=380)
 
-        icon_html = build_site_marker_icon_html(row, selected_task_columns, color)
+        icon_html = build_site_marker_icon_html(row, selected_task_columns, color, people_by_location=people_by_location)
         icon_height = 76 if len(selected_task_columns) == 1 else 56
         folium.Marker(
             location=[lat, lon],
@@ -1654,11 +2065,12 @@ def render_map(
     selected_task_columns: list[str],
     filters: dict[str, Any],
     options: dict[str, Any],
+    people_by_location: dict[str, list[dict[str, Any]]] | None = None,
 ) -> None:
     if df.empty:
         st.info("No sites to display.")
         return
-    map_obj = create_folium_map(df, task_columns, selected_task_columns, filters, options)
+    map_obj = create_folium_map(df, task_columns, selected_task_columns, filters, options, people_by_location=people_by_location)
     map_key_material = "|".join(
         f"{row.get('location_id', '')}:{row.get('_latitude_num', '')}:{row.get('_longitude_num', '')}"
         for _, row in df.iterrows()
@@ -2185,6 +2597,72 @@ def render_floating_task_selector_css() -> None:
         @media (max-width: 900px) {
             .kpi-card-row {
                 grid-template-columns: 1fr;
+            }
+        }
+        .kpi-card-row-secondary {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 1rem;
+            align-items: stretch;
+            margin-bottom: 0.75rem;
+        }
+        .kpi-card-span-2 {
+            grid-column: span 2;
+        }
+        .people-kpi-lines {
+            display: flex;
+            flex-direction: column;
+            gap: 0.32rem;
+            color: #111827;
+            font-size: 0.78rem;
+            font-weight: 800;
+            line-height: 1.28;
+        }
+        .people-kpi-line {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.48rem;
+            padding: 0.32rem 0.44rem;
+            word-break: break-word;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.24rem;
+        }
+        .people-kpi-site-name {
+            color: #111827;
+            font-weight: 950;
+            margin-right: 0.05rem;
+        }
+        .people-kpi-count {
+            background: #e2e8f0;
+            border: 1px solid #cbd5e1;
+            border-radius: 999px;
+            color: #0f172a;
+            font-size: 0.72rem;
+            font-weight: 950;
+            padding: 0.04rem 0.38rem;
+            line-height: 1.15;
+        }
+        .people-kpi-badge-list {
+            display: inline-flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.22rem;
+        }
+        .people-kpi-paren {
+            color: #475569;
+            font-weight: 900;
+        }
+        .people-name-badge {
+            text-transform: uppercase;
+        }
+        @media (max-width: 900px) {
+            .kpi-card-row-secondary {
+                grid-template-columns: 1fr;
+            }
+            .kpi-card-span-2 {
+                grid-column: span 1;
             }
         }
         .kpi-card-main {
@@ -2935,7 +3413,11 @@ def get_uploaded_task_config_from_state() -> Any | None:
     return st.session_state.get("uploaded_task_config_csv")
 
 
-def render_sidebar_upload_bottom(source_name: str, task_config_source_name: str) -> tuple[Any | None, Any | None]:
+def get_uploaded_site_people_from_state() -> Any | None:
+    return st.session_state.get("uploaded_site_people_csv")
+
+
+def render_sidebar_upload_bottom(source_name: str, task_config_source_name: str, site_people_source_name: str) -> tuple[Any | None, Any | None, Any | None]:
     st.sidebar.divider()
     st.sidebar.subheader("CSV")
     uploaded_file = st.sidebar.file_uploader("Upload site status CSV", type=["csv"], key="uploaded_site_status_csv")
@@ -2959,7 +3441,19 @@ def render_sidebar_upload_bottom(source_name: str, task_config_source_name: str)
         use_container_width=True,
     )
     st.sidebar.caption(f"Current task config file: {task_config_source_name}")
-    return uploaded_file, uploaded_task_config
+
+    st.sidebar.divider()
+    st.sidebar.subheader("Site People")
+    uploaded_site_people = st.sidebar.file_uploader("Upload site_people CSV", type=["csv"], key="uploaded_site_people_csv")
+    st.sidebar.download_button(
+        "Download sample site_people CSV",
+        data=create_sample_site_people_csv(),
+        file_name="site_people.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    st.sidebar.caption(f"Current site people file: {site_people_source_name}")
+    return uploaded_file, uploaded_task_config, uploaded_site_people
 
 
 def render_task_config_summary(all_task_columns: list[str], visible_task_columns: list[str], task_config_meta: dict[str, Any]) -> None:
@@ -3014,10 +3508,13 @@ def render_version_quick_filter(df: pd.DataFrame) -> None:
             st.sidebar.caption("Current Version filter: All")
     st.sidebar.divider()
 
-def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[str, Any]:
+def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str], site_people_df: pd.DataFrame | None = None) -> dict[str, Any]:
     st.sidebar.header("Filters")
     if st.sidebar.button("Reset filters", use_container_width=True):
         keys_to_clear = [
+            "filter_people_show_assigned",
+            "filter_people_team",
+            "filter_people_search",
             "filter_country",
             "filter_state",
             "filter_city",
@@ -3030,6 +3527,13 @@ def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[st
         for key in keys_to_clear:
             st.session_state.pop(key, None)
         st.rerun()
+
+    people_options = get_people_filter_options(site_people_df if site_people_df is not None else pd.DataFrame())
+    st.sidebar.markdown("**People Filter**")
+    people_show_assigned = st.sidebar.checkbox("Show assigned staff", value=True, key="filter_people_show_assigned")
+    people_team = st.sidebar.multiselect("People Team", people_options.get("team", []), key="filter_people_team")
+    people_search = st.sidebar.text_input("People search", key="filter_people_search")
+    st.sidebar.divider()
 
     def unique_options(column: str) -> list[str]:
         if column not in df.columns:
@@ -3056,6 +3560,9 @@ def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[st
     data_issue_only = st.sidebar.checkbox("Only sites with data issues", key="filter_data_issue_only")
 
     return {
+        "people_show_assigned": people_show_assigned,
+        "people_team": people_team,
+        "people_search": people_search,
         "country": country,
         "state": state,
         "city": city,
@@ -3065,6 +3572,7 @@ def render_sidebar_filters(df: pd.DataFrame, task_columns: list[str]) -> dict[st
         "status_levels": status_levels,
         "data_issue_only": data_issue_only,
     }
+
 
 def render_safe_html(html_content: str) -> None:
     if hasattr(st, "html"):
@@ -3211,6 +3719,113 @@ def _kpi_sites_by_group(kpis: dict[str, Any], label: str) -> dict[str, list[Any]
     return {}
 
 
+
+
+def _person_badge_palette(person_key: str, color_index: int | None = None) -> dict[str, str]:
+    if color_index is not None:
+        try:
+            return PERSON_BADGE_PALETTE[int(color_index) % len(PERSON_BADGE_PALETTE)]
+        except Exception:
+            pass
+    key = str(person_key or "").strip()
+    digest = int(hashlib.sha256(key.encode("utf-8")).hexdigest(), 16) if key else 0
+    return PERSON_BADGE_PALETTE[digest % len(PERSON_BADGE_PALETTE)]
+
+
+def _build_person_color_index_map(active_people: pd.DataFrame) -> dict[str, int]:
+    if active_people is None or active_people.empty or "_person_key" not in active_people.columns:
+        return {}
+    unique_rows = active_people.drop_duplicates(subset=["_person_key"]).copy()
+    unique_rows["_sort_name"] = unique_rows["Name"].astype(str).str.casefold()
+    unique_rows["_sort_team"] = unique_rows["Team"].astype(str).str.casefold()
+    unique_rows = unique_rows.sort_values(["_sort_name", "_sort_team", "_person_key"])
+    keys = [str(key).strip() for key in unique_rows["_person_key"].tolist() if str(key).strip()]
+    return {key: index % len(PERSON_BADGE_PALETTE) for index, key in enumerate(keys)}
+
+
+def _person_badge_html(name: str, person_key: str | None = None, color_index: int | None = None) -> str:
+    display_name = str(name or "").strip().upper()
+    if not display_name:
+        return ""
+    palette = _person_badge_palette(person_key or display_name, color_index)
+    safe_name = html.escape(display_name)
+    style = (
+        "display:inline-flex;"
+        "align-items:center;"
+        "border-radius:999px;"
+        "padding:0.12rem 0.48rem;"
+        "font-size:0.70rem;"
+        "font-weight:900;"
+        "line-height:1.15;"
+        "letter-spacing:0.025em;"
+        "white-space:nowrap;"
+        f"background:{palette['background']};"
+        f"border:1px solid {palette['border']};"
+        f"color:{palette['color']};"
+        "box-shadow:0 1px 3px rgba(15,23,42,0.18);"
+    )
+    return f"<span class='people-name-badge' style='{style}' title='{safe_name}'>{safe_name}</span>"
+
+
+def _people_kpi_card_html(title: str, count: Any, lines: list[str], span_two: bool = False, lines_are_html: bool = False) -> str:
+    safe_title = html.escape(str(title))
+    safe_count = html.escape(str(count))
+    extra_class = " kpi-card-span-2" if span_two else ""
+    if lines:
+        if lines_are_html:
+            line_html = "".join(f"<div class='people-kpi-line'>{line}</div>" for line in lines)
+        else:
+            line_html = "".join(f"<div class='people-kpi-line'>{html.escape(line)}</div>" for line in lines)
+    else:
+        line_html = "<div class='people-kpi-line'>No assigned staff</div>"
+    return f"""
+    <div class='kpi-card{extra_class}'>
+        <div class='kpi-card-main'>
+            <div class='kpi-card-title'>{safe_title}</div>
+            <div class='kpi-card-value'>{safe_count}</div>
+        </div>
+        <div class='people-kpi-lines'>{line_html}</div>
+    </div>
+    """
+
+
+def render_people_kpi_cards(people_kpis: dict[str, Any]) -> None:
+    team_value = people_kpis.get("Team Overview", {})
+    staff_value = people_kpis.get("On-Site Staff", {})
+    team_counts = team_value.get("team_counts", {}) if isinstance(team_value, dict) else {}
+    team_lines = [f"{team}: {count}" for team, count in team_counts.items()]
+    site_rows = staff_value.get("site_people", []) if isinstance(staff_value, dict) else []
+    staff_lines = []
+    for item in site_rows:
+        location_name = str(item.get("location_name", "") or item.get("location_id", ""))
+        safe_location_name = html.escape(location_name)
+        safe_count = html.escape(str(item.get("count", 0)))
+        people_entries = item.get("people", [])
+        if people_entries:
+            people_badges = "".join(
+                _person_badge_html(str(person.get("name", "")), str(person.get("person_key", "")), person.get("color_index"))
+                for person in people_entries
+            )
+        else:
+            people_badges = "".join(_person_badge_html(str(name), str(name)) for name in item.get("names", []))
+        staff_lines.append(
+            "<span class='people-kpi-site-name'>"
+            f"{safe_location_name}:"
+            "</span>"
+            f"<span class='people-kpi-count'>{safe_count}</span>"
+            "<span class='people-kpi-paren'>(</span>"
+            f"<span class='people-kpi-badge-list'>{people_badges}</span>"
+            "<span class='people-kpi-paren'>)</span>"
+        )
+    html_content = "".join(
+        [
+            _people_kpi_card_html("On-Site Team", team_value.get("count", 0) if isinstance(team_value, dict) else 0, team_lines),
+            _people_kpi_card_html("On-Site Staff", staff_value.get("count", 0) if isinstance(staff_value, dict) else 0, staff_lines, span_two=True, lines_are_html=True),
+        ]
+    )
+    render_safe_html(f"<div class='kpi-card-row-secondary'>{html_content}</div>")
+
+
 def render_kpi_cards(kpis: dict[str, Any]) -> None:
     cards_html = "".join(
         [
@@ -3252,7 +3867,7 @@ def _render_task_detail_row(task: str, parsed: dict[str, Any]) -> None:
             st.warning(parsed["issue"])
 
 
-def render_selected_site_detail(selected_site: pd.Series | None, task_columns: list[str], selected_task_columns: list[str]) -> None:
+def render_selected_site_detail(selected_site: pd.Series | None, task_columns: list[str], selected_task_columns: list[str], people_by_location: dict[str, list[dict[str, Any]]] | None = None) -> None:
     st.subheader("Selected Site Detail")
     if selected_site is None:
         st.info("Click a marker or site label on the map to view site details.")
@@ -3273,6 +3888,24 @@ def render_selected_site_detail(selected_site: pd.Series | None, task_columns: l
         except ZoneInfoNotFoundError:
             local_time = "Invalid timezone"
     info_cols[3].metric("Local Time", local_time)
+
+    people_for_site = get_people_for_site(site, people_by_location)
+    st.markdown("#### Assigned Staff")
+    if people_for_site:
+        people_table = pd.DataFrame(
+            [
+                {
+                    "Name": person.get("name", ""),
+                    "Team": person.get("team", ""),
+                    "Contact Information": person.get("contact", ""),
+                    "Note": person.get("note", ""),
+                }
+                for person in people_for_site
+            ]
+        )
+        st.dataframe(people_table, use_container_width=True, hide_index=True)
+    else:
+        st.info("No assigned staff for this site.")
 
     st.markdown("#### Selected Work Items")
     for task in selected_task_columns:
@@ -3366,19 +3999,27 @@ def main() -> None:
 
     uploaded_file = get_uploaded_file_from_state()
     uploaded_task_config = get_uploaded_task_config_from_state()
+    uploaded_site_people = get_uploaded_site_people_from_state()
     try:
         raw_df = load_csv(uploaded_file)
         task_config_df = load_task_config(uploaded_task_config)
+        site_people_raw_df = load_site_people(uploaded_site_people)
     except Exception as exc:
         st.error(str(exc))
         st.stop()
 
     source_name = uploaded_file.name if uploaded_file is not None else DEFAULT_SITE_STATUS_FILENAME
     bundled_task_config_exists = get_default_task_config_csv() is not None
+    bundled_site_people_exists = get_default_site_people_csv() is not None
     task_config_source_name = (
         uploaded_task_config.name
         if uploaded_task_config is not None
         else (DEFAULT_TASK_CONFIG_FILENAME if bundled_task_config_exists else "Not loaded")
+    )
+    site_people_source_name = (
+        uploaded_site_people.name
+        if uploaded_site_people is not None
+        else (DEFAULT_SITE_PEOPLE_FILENAME if bundled_site_people_exists else "Not loaded")
     )
 
     all_task_columns = get_task_columns(raw_df)
@@ -3388,11 +4029,12 @@ def main() -> None:
         task_columns_to_validate=task_columns,
         require_task_columns=not bool(all_task_columns),
     )
-    validation_issues = validation_issues + task_config_issues
+    site_people_df, site_people_issues = prepare_site_people(site_people_raw_df, validated_df)
+    validation_issues = validation_issues + task_config_issues + site_people_issues
 
     if not all_task_columns:
         st.error("No task columns found after the enabled column. Add at least one work item column.")
-        render_sidebar_upload_bottom(source_name, task_config_source_name)
+        render_sidebar_upload_bottom(source_name, task_config_source_name, site_people_source_name)
         issue_df = render_data_quality_report(validation_issues)
         render_download_buttons(pd.DataFrame(), issue_df)
         st.stop()
@@ -3403,8 +4045,8 @@ def main() -> None:
     render_version_quick_filter(validated_df)
     selected_task_columns = render_task_selector(task_columns)
     render_task_config_summary(all_task_columns, task_columns, task_config_meta)
-    filters = render_sidebar_filters(validated_df, task_columns)
-    render_sidebar_upload_bottom(source_name, task_config_source_name)
+    filters = render_sidebar_filters(validated_df, task_columns, site_people_df)
+    render_sidebar_upload_bottom(source_name, task_config_source_name, site_people_source_name)
 
     options = {
         "show_site_labels": True,
@@ -3413,16 +4055,20 @@ def main() -> None:
     }
 
     filtered_df = apply_filters(validated_df, filters, selected_task_columns)
+    filtered_people_df = filter_site_people(site_people_df, filters)
+    people_by_location = build_people_by_location(filtered_people_df)
     kpi_task_columns = selected_task_columns if selected_task_columns else task_columns
     kpis = calculate_kpis(validated_df, filtered_df, kpi_task_columns, validation_issues)
+    people_kpis = calculate_people_kpis(filtered_df, filtered_people_df)
 
     updated_date_display = get_updated_date_display(validated_df)
     render_dashboard_meta_header(source_name, updated_date_display, len(filtered_df))
     render_kpi_cards(kpis)
+    render_people_kpi_cards(people_kpis)
 
     st.divider()
     st.subheader("Map")
-    render_map(filtered_df, task_columns, selected_task_columns, filters, options)
+    render_map(filtered_df, task_columns, selected_task_columns, filters, options, people_by_location=people_by_location)
 
     selected_site = None
     selected_site_id = st.session_state.get("selected_site_id")
@@ -3435,7 +4081,7 @@ def main() -> None:
         render_gantt_chart_section(filtered_df)
 
     with st.expander("Selected Site Detail", expanded=True):
-        render_selected_site_detail(selected_site, task_columns, selected_task_columns)
+        render_selected_site_detail(selected_site, task_columns, selected_task_columns, people_by_location=people_by_location)
 
     with st.expander("Data Table", expanded=False):
         filtered_table = render_data_table(filtered_df, selected_task_columns)
