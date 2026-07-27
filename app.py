@@ -51,7 +51,7 @@ SITE_METADATA_COLUMNS = {"version", "updated_date"}
 UPDATED_DATE_COLUMN_NAME = "updated_date"
 SITE_QTY_COLUMN_NAME = "QTY"
 UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-dashboard_ver = "v1.53"
+dashboard_ver = "v1.54"
 DEFAULT_TASK_CONFIG_FILENAME = "task_config.csv"
 TASK_CONFIG_COLUMNS = ["task_name", "visible", "category", "display_order", "description"]
 DEFAULT_SITE_PEOPLE_FILENAME = "site_people.csv"
@@ -3772,7 +3772,14 @@ def render_floating_task_selector_css() -> None:
         .gantt-cod-marker {{
             position: absolute;
             z-index: 8;
-            transform: translateX(-50%);
+            /*
+            Keep the COD diamond itself centered on the exact schedule date.
+            The previous translateX(-50%) centered the whole marker group, including
+            the label, so the diamond visually appeared earlier than the actual COD date.
+            The diamond box is 13px + 2px borders on both sides = 17px, so -8.5px
+            centers the diamond while leaving the label to extend to the right.
+            */
+            transform: translateX(-8.5px);
             display: inline-flex;
             align-items: center;
             gap: 0.22rem;
