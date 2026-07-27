@@ -49,8 +49,9 @@ PROGRESS_RE = re.compile(r"^\s*([+-]?\d+(?:\.\d+)?)\s*/\s*([+-]?\d+(?:\.\d+)?)\s
 DEFAULT_SITE_STATUS_FILENAME = "site_status.csv"
 SITE_METADATA_COLUMNS = {"version", "updated_date"}
 UPDATED_DATE_COLUMN_NAME = "updated_date"
+SITE_QTY_COLUMN_NAME = "QTY"
 UPDATED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-dashboard_ver = "v1.47"
+dashboard_ver = "v1.53"
 DEFAULT_TASK_CONFIG_FILENAME = "task_config.csv"
 TASK_CONFIG_COLUMNS = ["task_name", "visible", "category", "display_order", "description"]
 DEFAULT_SITE_PEOPLE_FILENAME = "site_people.csv"
@@ -63,6 +64,13 @@ GANTT_TABLE_HIDE_BREAKPOINT_PX = 1100
 GANTT_LOOKBACK_DAYS = 7
 GANTT_LOOKAHEAD_MONTHS = 2
 GANTT_PHASE_BAR_DAYS = 21
+COMMISSIONING_BASE_UNITS = 90.0
+CCX_BASE_DURATION_DAYS = 14
+HCX_BASE_DURATION_DAYS = 7
+COMMISSIONING_MIN_DURATION_DAYS = 7
+SCHEDULE_ENTRY_SPLIT_RE = re.compile(r"[;|\n\r]+|,\s*(?=\d{4}-\d{1,2}-\d{1,2})")
+SCHEDULE_DATE_TOKEN_RE = re.compile(r"(?P<date>\d{4}-\d{1,2}-\d{1,2})")
+SCHEDULE_UNIT_TOKEN_RE = re.compile(r"\(\s*(?P<units>\d+(?:\.\d+)?)\s*(?:ea|units?|대|pcs?)?\s*\)", re.IGNORECASE)
 GANTT_SHOW_ALL_END_PADDING_DAYS = 7
 GANTT_COMPLETED_HIDE_AFTER_DAYS = 21
 GANTT_CCX_COLOR = "#2563eb"
@@ -137,17 +145,17 @@ PERSON_BADGE_PALETTE = [
     {"background": "#155e75", "border": "#bae6fd", "color": "#ffffff"},
 ]
 
-SAMPLE_CSV = """location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,Version,updated_date,CCx Start,HCx Start,COD,F/W Update,Valve1,Valve2,Water Pump,Chiller#1 F/W Version,Chiller#2 F/W Version,HVAC F/W Version,Note
-FL001,BLACKWATER RIVER,US,FL,Milton,30.6,-86.9,America/Chicago,Y,1.5,2026-05-30,2026-05-01,2026-05-15,2026-05-29,3/3,60/66,N/A,10/66,3.0.0.0,3.0.0.0,3.0.0.1,Pending COD review
-FL002,CANOE,US,FL,Holt,30.6,-86.7,America/Chicago,Y,1.5,2026-05-30,2026-05-08,2026-05-22,#N/A,1/3,20/183,183/183,183/183,3.0.0.2,3.0.0.2,3.0.0.6,Active schedule
-FL003,CARTWHEEL,US,FL,Jay,30.9,-87.1,America/Chicago,Y,1.0,2026-05-30,Commercial Operation,N/A,#N/A,3/3,66/66,183/183,N/A,3.0.0.2,3.0.0.2,3.0.0.6,Legacy commercial operation entry
-FL004,SAMPLE DISABLED,US,TX,Dallas,32.7,-96.7,America/Chicago,N,1.0,2026-05-30,,,,0/3,5/10,NA,,Pending,Pending,Completed,Disabled sample
+SAMPLE_CSV = """location_id,location_name,country,state,city,latitude,longitude,timezone,enabled,Version,updated_date,QTY,CCx Start,HCx Start,COD,CCx Start 2,HCx Start 2,COD 2,F/W Update,Valve1,Valve2,Water Pump,Chiller#1 F/W Version,Chiller#2 F/W Version,HVAC F/W Version,Note
+FL001,BLACKWATER RIVER,US,FL,Milton,30.6,-86.9,America/Chicago,Y,1.5,2026-05-30,135,2026-05-01,2026-05-15,2026-05-29,2026-07-06(45),2026-07-20(45),2026-07-27(45),3/3,60/66,N/A,10/66,3.0.0.0,3.0.0.0,3.0.0.1,QTY 135; base schedule shows 90 after subtracting additional 45
+FL002,CANOE,US,FL,Holt,30.6,-86.7,America/Chicago,Y,1.5,2026-05-30,183,2026-05-08,2026-06-05,#N/A,,,,1/3,20/183,183/183,183/183,3.0.0.2,3.0.0.2,3.0.0.6,QTY-driven commissioning schedule
+FL003,CARTWHEEL,US,FL,Jay,30.9,-87.1,America/Chicago,Y,1.0,2026-05-30,189,"Commercial Operation, 2026-08-03(6)",2026-08-17(6),2026-08-24(6),,,,3/3,66/66,183/183,N/A,3.0.0.2,3.0.0.2,3.0.0.6,Legacy commercial operation with additional commissioning
+FL004,SAMPLE DISABLED,US,TX,Dallas,32.7,-96.7,America/Chicago,N,1.0,2026-05-30,90,,,,,,,0/3,5/10,NA,,Pending,Pending,Completed,Disabled sample
 """
 
 SAMPLE_TASK_CONFIG_CSV = """task_name,visible,category,display_order,description
-CCx Start,Y,Schedule,5,CCx start date
-HCx Start,Y,Schedule,6,HCx start date
-COD,Y,Schedule,7,Commercial operation date
+CCx Start,Y,Schedule,5,CCx start date list; default quantity comes from site QTY minus additional CCx quantities
+HCx Start,Y,Schedule,6,HCx start date list; default quantity comes from site QTY minus additional HCx quantities
+COD,Y,Schedule,7,Commercial operation date list; default quantity comes from site QTY minus additional COD quantities
 F/W Update,Y,Active Work,8,Firmware update completion basis
 Valve1,Y,Active Work,10,Currently managed work item
 Valve2,Y,Active Work,20,Currently managed work item
@@ -357,27 +365,97 @@ def _validate_schedule_date_metadata(
     enabled_working: pd.DataFrame,
     issues: list[dict[str, Any]],
 ) -> None:
-    for schedule_column in (CCX_START_COLUMN_NAME, HCX_START_COLUMN_NAME, COD_COLUMN_NAME):
-        actual_col = _get_schedule_column_name(working.columns, schedule_column)
-        if actual_col is None:
-            continue
+    qty_col = _get_site_qty_column(working.columns)
+    if qty_col is not None:
         for idx, row in enabled_working.iterrows():
-            raw_value = row.get(actual_col, "")
-            text = str(raw_value).strip()
-            if not text or text.lower() in NA_VALUES or text in DASH_PLACEHOLDERS:
-                continue
-            if schedule_column in (CCX_START_COLUMN_NAME, HCX_START_COLUMN_NAME) and _is_commercial_operation_value(text):
-                continue
-            if _parse_schedule_date(text) is None:
+            qty_text = str(row.get(qty_col, "")).strip()
+            if qty_text and qty_text.lower() not in NA_VALUES and qty_text not in DASH_PLACEHOLDERS and _parse_equipment_units(qty_text) is None:
                 _add_issue(
                     issues,
                     int(idx),
                     row.get("location_id", ""),
-                    actual_col,
-                    raw_value,
-                    f"{actual_col} is not a valid schedule date. Use YYYY-MM-DD when possible.",
+                    qty_col,
+                    row.get(qty_col, ""),
+                    f"{qty_col} must be a positive equipment count because it is used as the site-level commissioning quantity.",
                     "WARNING",
                 )
+
+    for idx, row in enabled_working.iterrows():
+        for phase in ("CCx", "HCx"):
+            for schedule_col in _get_schedule_start_columns(working.columns, phase):
+                raw_value = row.get(schedule_col, "")
+                text = str(raw_value).strip()
+                if not text or text.lower() in NA_VALUES or text in DASH_PLACEHOLDERS:
+                    continue
+                if _is_commercial_operation_value(text):
+                    continue
+                entries = _split_schedule_entries(raw_value)
+                if not entries:
+                    continue
+                for entry in entries:
+                    if _entry_is_schedule_placeholder(entry):
+                        continue
+                    if _parse_schedule_entry_date(entry) is None:
+                        _add_issue(
+                            issues,
+                            int(idx),
+                            row.get("location_id", ""),
+                            schedule_col,
+                            raw_value,
+                            f"{schedule_col} contains an invalid schedule date entry. Use YYYY-MM-DD, YYYY-MM-DD(units), or Commercial Operation plus additional date entries.",
+                            "WARNING",
+                        )
+                        break
+                unit_col = _get_schedule_unit_column_for_start(working.columns, phase, schedule_col)
+                if unit_col is not None:
+                    unit_text = str(row.get(unit_col, "")).strip()
+                    if unit_text and unit_text.lower() not in NA_VALUES and unit_text not in DASH_PLACEHOLDERS and _parse_equipment_units(unit_text) is None:
+                        _add_issue(
+                            issues,
+                            int(idx),
+                            row.get("location_id", ""),
+                            unit_col,
+                            row.get(unit_col, ""),
+                            f"{unit_col} must be a positive equipment count. Example: 90.",
+                            "WARNING",
+                        )
+
+        for cod_col in _get_cod_columns(working.columns):
+            raw_value = row.get(cod_col, "")
+            text = str(raw_value).strip()
+            if not text or text.lower() in NA_VALUES or text in DASH_PLACEHOLDERS:
+                continue
+            entries = _split_schedule_entries(raw_value)
+            if not entries:
+                continue
+            for entry in entries:
+                if _entry_is_schedule_placeholder(entry):
+                    continue
+                if _parse_schedule_entry_date(entry) is None:
+                    _add_issue(
+                        issues,
+                        int(idx),
+                        row.get("location_id", ""),
+                        cod_col,
+                        raw_value,
+                        f"{cod_col} contains an invalid COD date entry. Use YYYY-MM-DD or YYYY-MM-DD(units).",
+                        "WARNING",
+                    )
+                    break
+            unit_col = _get_cod_unit_column_for_date(working.columns, cod_col)
+            if unit_col is not None:
+                unit_text = str(row.get(unit_col, "")).strip()
+                if unit_text and unit_text.lower() not in NA_VALUES and unit_text not in DASH_PLACEHOLDERS and _parse_equipment_units(unit_text) is None:
+                    _add_issue(
+                        issues,
+                        int(idx),
+                        row.get("location_id", ""),
+                        unit_col,
+                        row.get(unit_col, ""),
+                        f"{unit_col} must be a positive equipment count. Example: 90.",
+                        "WARNING",
+                    )
+
 
 def _normalize_task_config_visible(value: Any) -> bool:
     if value is None or pd.isna(value):
@@ -536,6 +614,10 @@ def get_task_columns(df: pd.DataFrame) -> list[str]:
             continue
         if is_site_metadata_column(col_name):
             continue
+        if is_site_qty_column(col_name):
+            continue
+        if is_schedule_unit_column(col_name) or is_cod_unit_column(col_name) or _is_additional_schedule_start_column(col_name) or _is_additional_cod_column(col_name):
+            continue
         task_columns.append(col_name)
     return task_columns
 
@@ -546,7 +628,9 @@ def is_note_column(column_name: str) -> bool:
 
 def is_schedule_column(column_name: str) -> bool:
     normalized = str(column_name).strip().lower()
-    return normalized in {CCX_START_COLUMN_NAME.lower(), HCX_START_COLUMN_NAME.lower(), COD_COLUMN_NAME.lower()}
+    if normalized in {CCX_START_COLUMN_NAME.lower(), HCX_START_COLUMN_NAME.lower(), COD_COLUMN_NAME.lower()}:
+        return True
+    return _is_cod_column_name(column_name) and _cod_column_sequence(column_name) == 1
 
 
 def normalize_enabled(value: Any) -> bool | None:
@@ -1201,19 +1285,13 @@ def _get_schedule_phase_for_column(task_name: str) -> str | None:
 
 
 def _build_schedule_segments_for_row(row: pd.Series) -> list[dict[str, Any]]:
-    cod_date = _get_cod_date_for_row(row)
     segments: list[dict[str, Any]] = []
     for segment in _build_schedule_segments_from_events(_get_schedule_events_for_row(row)):
         start = segment["start"]
         end = segment["end"]
-        if cod_date is not None:
-            if start >= cod_date:
-                continue
-            end = min(end, cod_date)
         if end > start:
-            segments.append({**segment, "end": end})
-    if cod_date is not None:
-        segments.append({"type": "COD", "start": cod_date, "end": cod_date, "color": GANTT_COD_COLOR})
+            segments.append(segment)
+    segments.extend(_get_cod_events_for_row(row))
     return segments
 
 
@@ -1236,32 +1314,37 @@ def _schedule_kpi_status_for_row(row: pd.Series, task_name: str, today: datetime
     if phase is None:
         return _make_kpi_status("not_applicable", "N/A")
     if phase in {"CCx", "HCx"}:
-        actual_col = _get_schedule_column_name(row.index, CCX_START_COLUMN_NAME if phase == "CCx" else HCX_START_COLUMN_NAME)
-        raw_value = row.get(actual_col, "") if actual_col is not None else ""
-        raw_text = str(raw_value).strip()
+        phase_events = [event for event in _build_schedule_segments_for_row(row) if event.get("type") == phase]
         if _row_has_commercial_operation(row, current_day):
             return _make_kpi_status("progress", "Complete", 100.0)
-        if not raw_text or raw_text.lower() in NA_VALUES or raw_text in DASH_PLACEHOLDERS:
+        if not phase_events:
+            if _phase_has_legacy_commercial_operation(row, phase):
+                return _make_kpi_status("progress", GANTT_COMMERCIAL_OPERATION_LABEL, 100.0)
             return _make_kpi_status("not_applicable", "N/A")
-        start_date = _parse_schedule_date(raw_value)
-        if start_date is None:
-            return _make_kpi_status("invalid_progress", "Invalid schedule date", None, "Invalid schedule date.")
-        segment = next((item for item in _build_schedule_segments_for_row(row) if item.get("type") == phase and item.get("start") == start_date), None)
-        end_date = segment.get("end") if segment is not None else start_date + timedelta(days=GANTT_PHASE_BAR_DAYS)
-        if current_day >= end_date:
-            return _make_kpi_status("progress", f"Complete · ends {end_date.strftime('%Y-%m-%d')}", 100.0)
-        return _make_kpi_status("progress", f"Incomplete · ends {end_date.strftime('%Y-%m-%d')}", 0.0)
-    actual_col = _get_cod_column_name(row.index)
-    raw_value = row.get(actual_col, "") if actual_col is not None else ""
-    raw_text = str(raw_value).strip()
-    if not raw_text or raw_text.lower() in NA_VALUES or raw_text in DASH_PLACEHOLDERS:
+        active_segments = [event for event in phase_events if event.get("start") <= current_day < event.get("end")]
+        if active_segments:
+            active = min(active_segments, key=lambda item: item["end"])
+            return _make_kpi_status("progress", f"Incomplete · active until {active['end'].strftime('%Y-%m-%d')}", 0.0)
+        future_segments = [event for event in phase_events if event.get("start") > current_day]
+        if future_segments:
+            next_segment = min(future_segments, key=lambda item: item["start"])
+            return _make_kpi_status("progress", f"Incomplete · next {next_segment['start'].strftime('%Y-%m-%d')}", 0.0)
+        latest_segment = max(phase_events, key=lambda item: item["end"])
+        return _make_kpi_status("progress", f"Complete · latest ended {latest_segment['end'].strftime('%Y-%m-%d')}", 100.0)
+    cod_cols = _get_cod_columns(row.index)
+    raw_values = [str(row.get(col, "")).strip() for col in cod_cols]
+    has_raw_cod = any(text and text.lower() not in NA_VALUES and text not in DASH_PLACEHOLDERS for text in raw_values)
+    if not has_raw_cod:
         return _make_kpi_status("not_applicable", "N/A")
-    cod_date = _parse_schedule_date(raw_value)
-    if cod_date is None:
+    cod_events = _get_cod_events_for_row(row)
+    if not cod_events:
         return _make_kpi_status("invalid_progress", "Invalid COD date", None, "Invalid COD date.")
-    if current_day >= cod_date:
-        return _make_kpi_status("progress", f"Complete · COD {cod_date.strftime('%Y-%m-%d')}", 100.0)
-    return _make_kpi_status("progress", f"Incomplete · COD {cod_date.strftime('%Y-%m-%d')}", 0.0)
+    upcoming = [event for event in cod_events if event["start"] > current_day]
+    if upcoming:
+        next_cod = min(upcoming, key=lambda item: item["start"])
+        return _make_kpi_status("progress", f"Incomplete · next COD {next_cod['start'].strftime('%Y-%m-%d')}", 0.0)
+    latest_cod = max(cod_events, key=lambda item: item["start"])
+    return _make_kpi_status("progress", f"Complete · latest COD {latest_cod['start'].strftime('%Y-%m-%d')}", 100.0)
 
 
 def _build_kpi_statuses_for_row(row: pd.Series, selected_task_columns: list[str]) -> dict[str, dict[str, Any]]:
@@ -1790,8 +1873,9 @@ def build_site_label_html(row: pd.Series, selected_task_columns: list[str], show
     if len(selected_task_columns) == 1:
         task = selected_task_columns[0]
         parsed = parse_task_status_value(task, row.get(task, ""))
+        display_text = _format_schedule_task_display(row, task, row.get(task, "")) if is_schedule_column(task) else parsed["display_text"]
         safe_task = html.escape(task)
-        safe_display = html.escape(parsed["display_text"])
+        safe_display = html.escape(display_text)
         badge_color = STATUS_COLORS.get(parsed["color"], STATUS_COLORS["gray"])
         lines.append(
             "<div style='margin-top:2px; color:#111827;'>"
@@ -1832,14 +1916,26 @@ def build_popup_html(
     selected = task_columns if selected_task_columns is None else selected_task_columns
     site_name = html.escape(str(row.get("location_name", "")))
     city_state = html.escape(f"{row.get('city', '')}, {row.get('state', '')}".strip(", "))
+    site_qty = _get_row_total_equipment_qty(row)
+    site_qty_text = _format_equipment_units(site_qty)
+    site_qty_html = ""
+    if site_qty_text:
+        site_qty_html = (
+            '<div style="display:inline-block; margin:2px 0 8px 0; padding:3px 8px; '
+            'border-radius:999px; background:#eef2ff; border:1px solid #c7d2fe; '
+            'color:#1e1b4b; font-size:12px; font-weight:800;">'
+            f"Site QTY: {html.escape(site_qty_text)} units"
+            "</div>"
+        )
 
     rows = []
     for task in selected:
         parsed = parse_task_status_value(task, row.get(task, ""))
+        display_text = _format_schedule_task_display(row, task, row.get(task, "")) if is_schedule_column(task) else parsed["display_text"]
         rows.append(
             "<tr>"
             f"<td style='padding:4px 7px; font-weight:600; border-bottom:1px solid #eef2f7;'>{html.escape(task)}</td>"
-            f"<td style='padding:4px 7px; border-bottom:1px solid #eef2f7;'>{html.escape(parsed['display_text'])}</td>"
+            f"<td style='padding:4px 7px; border-bottom:1px solid #eef2f7;'>{html.escape(display_text)}</td>"
             "</tr>"
         )
 
@@ -1849,10 +1945,11 @@ def build_popup_html(
             rows.append("<tr><td colspan='2' style='padding:7px; color:#4b5563; border-top:1px solid #d1d5db; font-weight:700;'>Other tasks</td></tr>")
         for task in remaining:
             parsed = parse_task_status_value(task, row.get(task, ""))
+            display_text = _format_schedule_task_display(row, task, row.get(task, "")) if is_schedule_column(task) else parsed["display_text"]
             rows.append(
                 "<tr>"
                 f"<td style='padding:4px 7px; border-bottom:1px solid #eef2f7;'>{html.escape(task)}</td>"
-                f"<td style='padding:4px 7px; border-bottom:1px solid #eef2f7;'>{html.escape(parsed['display_text'])}</td>"
+                f"<td style='padding:4px 7px; border-bottom:1px solid #eef2f7;'>{html.escape(display_text)}</td>"
                 "</tr>"
             )
 
@@ -1868,7 +1965,8 @@ def build_popup_html(
     return f"""
     <div style="font-family:Arial, sans-serif; width:320px; color:#111827;">
       <div style="font-size:15px; font-weight:800; margin-bottom:2px; color:#000000;">{site_name}</div>
-      <div style="font-size:12px; color:#374151; margin-bottom:7px;">{city_state}</div>
+      <div style="font-size:12px; color:#374151; margin-bottom:3px;">{city_state}</div>
+      {site_qty_html}
       <table style="border-collapse:collapse; width:100%; font-size:12px; color:#111827;">
         <thead>
           <tr style="background:#f3f4f6;"><th align="left" style="padding:4px 7px;">Task</th><th align="left" style="padding:4px 7px;">Status</th></tr>
@@ -2091,22 +2189,297 @@ def _get_schedule_column_name(columns: Any, target_name: str) -> str | None:
     return _find_case_insensitive_column(columns, target_name)
 
 
-def _is_commercial_operation_value(value: Any) -> bool:
-    if value is None or pd.isna(value):
+def _schedule_column_canonical(value: Any) -> str:
+    return _canonical_name(value)
+
+
+def _schedule_phase_for_column_name(column_name: Any) -> str | None:
+    canonical = _schedule_column_canonical(column_name)
+    if re.fullmatch(r"ccxstart\d*", canonical):
+        return "CCx"
+    if re.fullmatch(r"hcxstart\d*", canonical):
+        return "HCx"
+    return None
+
+
+def _schedule_column_sequence(column_name: Any) -> int:
+    canonical = _schedule_column_canonical(column_name)
+    match = re.search(r"(\d+)$", canonical)
+    return int(match.group(1)) if match else 1
+
+
+def _is_schedule_start_column(column_name: Any) -> bool:
+    return _schedule_phase_for_column_name(column_name) in {"CCx", "HCx"}
+
+
+def _is_additional_schedule_start_column(column_name: Any) -> bool:
+    if not _is_schedule_start_column(column_name):
         return False
-    return str(value).strip().casefold() == GANTT_COMMERCIAL_OPERATION_LABEL.casefold()
+    return _schedule_column_sequence(column_name) > 1
 
 
-def _parse_schedule_date(value: Any) -> datetime | None:
+def is_schedule_unit_column(column_name: Any) -> bool:
+    canonical = _schedule_column_canonical(column_name)
+    return bool(re.fullmatch(r"(ccx|hcx)(units?|unitcount|equipment|equipmentcount|qty|quantity|count)\d*", canonical))
+
+
+def _schedule_unit_column_sequence(column_name: Any) -> int:
+    canonical = _schedule_column_canonical(column_name)
+    match = re.search(r"(\d+)$", canonical)
+    return int(match.group(1)) if match else 1
+
+
+def _get_schedule_start_columns(columns: Any, phase: str) -> list[str]:
+    phase_text = str(phase).strip().casefold()
+    matched: list[tuple[int, int, str]] = []
+    for order, col in enumerate(list(columns)):
+        if _schedule_phase_for_column_name(col) == ("CCx" if phase_text == "ccx" else "HCx"):
+            matched.append((_schedule_column_sequence(col), order, str(col)))
+    return [col for _, _, col in sorted(matched, key=lambda item: (item[0], item[1]))]
+
+
+def _get_schedule_unit_column_for_start(columns: Any, phase: str, start_column: Any) -> str | None:
+    phase_prefix = "ccx" if str(phase).strip().casefold() == "ccx" else "hcx"
+    sequence = _schedule_column_sequence(start_column)
+    candidates: list[tuple[int, str]] = []
+    for col in list(columns):
+        canonical = _schedule_column_canonical(col)
+        if not canonical.startswith(phase_prefix):
+            continue
+        if not is_schedule_unit_column(col):
+            continue
+        if _schedule_unit_column_sequence(col) != sequence:
+            continue
+        preference = 0
+        if "unit" in canonical:
+            preference = -3
+        elif "equipment" in canonical:
+            preference = -2
+        elif "qty" in canonical or "quantity" in canonical:
+            preference = -1
+        candidates.append((preference, str(col)))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: (item[0], item[1].casefold()))[0][1]
+
+
+def _is_cod_column_name(column_name: Any) -> bool:
+    canonical = _schedule_column_canonical(column_name)
+    return bool(re.fullmatch(r"(?:cod|coddate|commercialoperation|commercialoperationdate)\d*", canonical))
+
+
+def _cod_column_sequence(column_name: Any) -> int:
+    canonical = _schedule_column_canonical(column_name)
+    match = re.search(r"(\d+)$", canonical)
+    return int(match.group(1)) if match else 1
+
+
+def _is_additional_cod_column(column_name: Any) -> bool:
+    return _is_cod_column_name(column_name) and _cod_column_sequence(column_name) > 1
+
+
+def is_cod_unit_column(column_name: Any) -> bool:
+    canonical = _schedule_column_canonical(column_name)
+    return bool(re.fullmatch(r"(?:cod|commercialoperation)(?:units?|unitcount|equipment|equipmentcount|qty|quantity|count)\d*", canonical))
+
+
+def _cod_unit_column_sequence(column_name: Any) -> int:
+    canonical = _schedule_column_canonical(column_name)
+    match = re.search(r"(\d+)$", canonical)
+    return int(match.group(1)) if match else 1
+
+
+def _get_cod_columns(columns: Any) -> list[str]:
+    matched: list[tuple[int, int, str]] = []
+    for order, col in enumerate(list(columns)):
+        if _is_cod_column_name(col):
+            matched.append((_cod_column_sequence(col), order, str(col)))
+    return [col for _, _, col in sorted(matched, key=lambda item: (item[0], item[1]))]
+
+
+def _get_cod_unit_column_for_date(columns: Any, cod_column: Any) -> str | None:
+    sequence = _cod_column_sequence(cod_column)
+    candidates: list[tuple[int, str]] = []
+    for col in list(columns):
+        canonical = _schedule_column_canonical(col)
+        if not is_cod_unit_column(col):
+            continue
+        if _cod_unit_column_sequence(col) != sequence:
+            continue
+        preference = 0
+        if "unit" in canonical:
+            preference = -3
+        elif "equipment" in canonical:
+            preference = -2
+        elif "qty" in canonical or "quantity" in canonical:
+            preference = -1
+        candidates.append((preference, str(col)))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: (item[0], item[1].casefold()))[0][1]
+
+
+def is_site_qty_column(column_name: Any) -> bool:
+    canonical = _schedule_column_canonical(column_name)
+    if not canonical:
+        return False
+    if canonical.startswith(("ccx", "hcx", "cod", "commercialoperation")):
+        return False
+    return canonical in {
+        "qty",
+        "quantity",
+        "siteqty",
+        "sitequantity",
+        "siteequipmentqty",
+        "siteequipmentquantity",
+        "equipmentqty",
+        "equipmentquantity",
+        "equipmentcount",
+        "totalqty",
+        "totalquantity",
+        "totalcount",
+        "unitqty",
+        "units",
+        "totalunits",
+        "installedqty",
+        "installedquantity",
+    }
+
+
+def _get_site_qty_column(columns: Any) -> str | None:
+    preference_order = {
+        "qty": 0,
+        "quantity": 1,
+        "siteqty": 2,
+        "sitequantity": 3,
+        "equipmentqty": 4,
+        "equipmentquantity": 5,
+        "totalqty": 6,
+        "totalquantity": 7,
+    }
+    candidates: list[tuple[int, int, str]] = []
+    for order, col in enumerate(list(columns)):
+        if not is_site_qty_column(col):
+            continue
+        canonical = _schedule_column_canonical(col)
+        candidates.append((preference_order.get(canonical, 50), order, str(col)))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: (item[0], item[1]))[0][2]
+
+
+def _get_row_total_equipment_qty(row: pd.Series) -> float | None:
+    qty_col = _get_site_qty_column(row.index)
+    if qty_col is None:
+        return None
+    return _parse_equipment_units(row.get(qty_col, ""))
+
+
+def _is_additional_schedule_quantity_event(event: dict[str, Any]) -> bool:
+    return int(event.get("sequence", 1) or 1) > 1 or int(event.get("entry_order", 0) or 0) > 0
+
+
+def _assign_qty_based_default_units(events: list[dict[str, Any]], total_units: float | None) -> list[dict[str, Any]]:
+    if total_units is None or total_units <= 0:
+        return events
+
+    explicit_additional_units = 0.0
+    for event in events:
+        if _is_additional_schedule_quantity_event(event) and event.get("units_explicit") and event.get("units") is not None:
+            explicit_additional_units += float(event["units"])
+
+    remaining_units = max(float(total_units) - explicit_additional_units, 0.0)
+    base_candidates = [
+        event
+        for event in events
+        if not event.get("units_explicit")
+        and int(event.get("sequence", 1) or 1) == 1
+        and int(event.get("entry_order", 0) or 0) == 0
+    ]
+    if base_candidates:
+        # The first base schedule receives the QTY remainder. This preserves the old one-row schedule model
+        # while allowing later added schedules such as 2026-08-03(6) to be deducted from the site QTY.
+        base_candidates[0]["units"] = remaining_units
+        base_candidates[0]["units_source"] = "qty_remaining"
+        base_candidates[0]["units_explicit"] = False
+    return events
+
+
+def _parse_equipment_units(value: Any) -> float | None:
     if value is None or pd.isna(value):
         return None
     text = str(value).strip()
     if not text or text.lower() in NA_VALUES or text in DASH_PLACEHOLDERS:
         return None
-    parsed = pd.to_datetime(text, errors="coerce")
+    match = re.search(r"\d+(?:\.\d+)?", text.replace(",", ""))
+    if not match:
+        return None
+    try:
+        units = float(match.group(0))
+    except ValueError:
+        return None
+    return units if units > 0 else None
+
+
+def _format_equipment_units(units: float | None) -> str:
+    if units is None:
+        return ""
+    value = units
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.1f}".rstrip("0").rstrip(".")
+
+
+def _calculate_commissioning_duration_days(phase: str, units: float | None) -> int:
+    base_days = CCX_BASE_DURATION_DAYS if str(phase).strip().casefold() == "ccx" else HCX_BASE_DURATION_DAYS
+    unit_value = COMMISSIONING_BASE_UNITS if units is None else max(float(units), 1.0)
+    scaled_days = math.ceil(unit_value / COMMISSIONING_BASE_UNITS * base_days)
+    return max(COMMISSIONING_MIN_DURATION_DAYS, int(scaled_days))
+
+
+def _split_schedule_entries(value: Any) -> list[str]:
+    if value is None or pd.isna(value):
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    entries = [entry.strip() for entry in SCHEDULE_ENTRY_SPLIT_RE.split(text) if entry.strip()]
+    return entries if entries else [text]
+
+
+def _parse_schedule_entry_date(entry: Any) -> datetime | None:
+    if entry is None or pd.isna(entry):
+        return None
+    text = str(entry).strip()
+    if not text or text.lower() in NA_VALUES or text in DASH_PLACEHOLDERS or _is_commercial_operation_value(text):
+        return None
+    match = SCHEDULE_DATE_TOKEN_RE.search(text)
+    date_text = match.group("date") if match else text
+    parsed = pd.to_datetime(date_text, errors="coerce")
     if pd.isna(parsed):
         return None
     return parsed.to_pydatetime().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _parse_inline_units(entry: Any) -> float | None:
+    if entry is None or pd.isna(entry):
+        return None
+    text = str(entry).strip()
+    match = SCHEDULE_UNIT_TOKEN_RE.search(text)
+    if not match:
+        return None
+    try:
+        units = float(match.group("units"))
+    except ValueError:
+        return None
+    return units if units > 0 else None
+
+
+def _parse_schedule_date(value: Any) -> datetime | None:
+    entries = _split_schedule_entries(value)
+    if len(entries) != 1:
+        return None
+    return _parse_schedule_entry_date(entries[0])
 
 
 def _format_schedule_date(value: Any) -> str:
@@ -2116,10 +2489,109 @@ def _format_schedule_date(value: Any) -> str:
     return parsed.strftime("%Y-%m-%d") if parsed else "—"
 
 
+def _is_commercial_operation_value(value: Any) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    return str(value).strip().casefold() == GANTT_COMMERCIAL_OPERATION_LABEL.casefold()
+
+
+def _has_legacy_commercial_operation_entry(value: Any) -> bool:
+    """Return True when one of the comma/semicolon-delimited schedule entries is Commercial Operation."""
+    return any(_is_commercial_operation_value(entry) for entry in _split_schedule_entries(value))
+
+
+def _phase_has_legacy_commercial_operation(row: pd.Series, phase: str) -> bool:
+    return any(
+        _has_legacy_commercial_operation_entry(row.get(col, ""))
+        for col in _get_schedule_start_columns(row.index, phase)
+    )
+
+
+def _entry_is_schedule_placeholder(entry: Any) -> bool:
+    if entry is None or pd.isna(entry):
+        return True
+    text = str(entry).strip()
+    return (
+        not text
+        or text.lower() in NA_VALUES
+        or text in DASH_PLACEHOLDERS
+        or _is_commercial_operation_value(text)
+    )
+
+
+def _format_qty_display(units: float | None, compact: bool = False) -> str:
+    units_text = _format_equipment_units(units)
+    if not units_text:
+        return ""
+    return f"Q{units_text}" if compact else f"Qty {units_text}"
+
+
+def _schedule_event_display(event: dict[str, Any]) -> str:
+    start = event.get("start")
+    if not isinstance(start, datetime):
+        return "—"
+    qty_text = _format_qty_display(event.get("units"))
+    if not qty_text:
+        return start.strftime("%Y-%m-%d")
+    return f"{start.strftime('%Y-%m-%d')} · {qty_text}"
+
+
+def _format_schedule_events_for_phase(row: pd.Series, phase: str) -> str:
+    events = [event for event in _get_schedule_events_for_row(row) if event.get("type") == phase]
+    display_items: list[str] = []
+    if _phase_has_legacy_commercial_operation(row, phase):
+        display_items.append(GANTT_COMMERCIAL_OPERATION_LABEL)
+    if events:
+        events.sort(key=lambda item: (item["start"], int(item.get("sequence", 1)), int(item.get("entry_order", 0)), str(item.get("source_col", ""))))
+        display_items.extend(_schedule_event_display(event) for event in events)
+    return ", ".join(display_items) if display_items else "—"
+
+
+def _format_cod_events_for_row(row: pd.Series) -> str:
+    events = _get_cod_events_for_row(row)
+    if not events:
+        return "—"
+    events.sort(key=lambda item: (item["start"], int(item.get("sequence", 1)), int(item.get("entry_order", 0)), str(item.get("source_col", ""))))
+    return ", ".join(_schedule_event_display(event) for event in events)
+
+
+def _format_schedule_task_display(row: pd.Series, task_name: str, value: Any) -> str:
+    phase = _schedule_phase_for_column_name(task_name)
+    if phase in {"CCx", "HCx"}:
+        if _schedule_column_sequence(task_name) == 1:
+            return _format_schedule_events_for_phase(row, phase)
+        events = [
+            event
+            for event in _get_schedule_events_for_row(row)
+            if event.get("type") == phase and _canonical_name(event.get("source_col", "")) == _canonical_name(task_name)
+        ]
+        if events:
+            events.sort(key=lambda item: (item["start"], int(item.get("entry_order", 0))))
+            return ", ".join(_schedule_event_display(event) for event in events)
+    if _is_cod_column_name(task_name):
+        if _cod_column_sequence(task_name) == 1:
+            return _format_cod_events_for_row(row)
+        events = [
+            event
+            for event in _get_cod_events_for_row(row)
+            if _canonical_name(event.get("source_col", "")) == _canonical_name(task_name)
+        ]
+        if events:
+            events.sort(key=lambda item: (item["start"], int(item.get("entry_order", 0))))
+            return ", ".join(_schedule_event_display(event) for event in events)
+    parsed = _parse_schedule_date(value)
+    qty_text = _format_qty_display(_parse_inline_units(value))
+    if parsed and qty_text:
+        return f"{parsed.strftime('%Y-%m-%d')} · {qty_text}"
+    return parsed.strftime("%Y-%m-%d") if parsed else str(value).strip()
+
+
 def _add_months(dt: datetime, months: int) -> datetime:
     month = dt.month - 1 + months
     year = dt.year + month // 12
     month = month % 12 + 1
+    days_in_month = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 31, 30, 31, 30, 31, 30, 31]
+    # Correct the fixed list length defensively.
     days_in_month = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     day = min(dt.day, days_in_month[month - 1])
     return dt.replace(year=year, month=month, day=day)
@@ -2131,35 +2603,134 @@ def _date_pct(dt: datetime, window_start: datetime, window_end: datetime) -> flo
 
 
 def _get_schedule_events_for_row(row: pd.Series) -> list[dict[str, Any]]:
-    cc_col = _get_schedule_column_name(row.index, CCX_START_COLUMN_NAME)
-    hc_col = _get_schedule_column_name(row.index, HCX_START_COLUMN_NAME)
-    cc_date = _parse_schedule_date(row.get(cc_col, "")) if cc_col is not None else None
-    hc_date = _parse_schedule_date(row.get(hc_col, "")) if hc_col is not None else None
     events: list[dict[str, Any]] = []
-    if cc_date is not None:
-        events.append({"type": "CCx", "start": cc_date, "color": GANTT_CCX_COLOR})
-    if hc_date is not None:
-        events.append({"type": "HCx", "start": hc_date, "color": GANTT_HCX_COLOR})
-    events.sort(key=lambda item: (item["start"], 0 if item["type"] == "CCx" else 1))
+    total_units = _get_row_total_equipment_qty(row)
+
+    for phase in ("CCx", "HCx"):
+        phase_events: list[dict[str, Any]] = []
+        for start_col in _get_schedule_start_columns(row.index, phase):
+            raw_value = row.get(start_col, "")
+            raw_text = str(raw_value).strip()
+            if not raw_text or raw_text.lower() in NA_VALUES or raw_text in DASH_PLACEHOLDERS or _is_commercial_operation_value(raw_text):
+                continue
+
+            sequence = _schedule_column_sequence(start_col)
+            unit_col = _get_schedule_unit_column_for_start(row.index, phase, start_col)
+            column_units = _parse_equipment_units(row.get(unit_col, "")) if unit_col is not None else None
+
+            for entry_order, entry in enumerate(_split_schedule_entries(raw_value)):
+                start_date = _parse_schedule_entry_date(entry)
+                if start_date is None:
+                    continue
+
+                inline_units = _parse_inline_units(entry)
+                units = inline_units
+                units_explicit = inline_units is not None
+
+                # For the first/base CCx or HCx schedule, the site-level QTY is the source of truth.
+                # Existing CCx Units / HCx Units columns are still supported when QTY is absent,
+                # but they no longer force every site to display the default 90 units.
+                if units is None:
+                    if sequence == 1 and total_units is not None:
+                        units = None  # Assigned after additional explicit quantities are deducted.
+                        units_explicit = False
+                    elif column_units is not None:
+                        units = column_units
+                        units_explicit = True
+
+                phase_events.append(
+                    {
+                        "type": phase,
+                        "start": start_date,
+                        "color": GANTT_CCX_COLOR if phase == "CCx" else GANTT_HCX_COLOR,
+                        "units": units,
+                        "units_explicit": units_explicit,
+                        "units_source": "inline" if inline_units is not None else ("column" if units_explicit else "qty_pending"),
+                        "source_col": str(start_col),
+                        "unit_col": str(unit_col) if unit_col is not None else "",
+                        "sequence": sequence,
+                        "entry_order": entry_order,
+                    }
+                )
+
+        phase_events = _assign_qty_based_default_units(phase_events, total_units)
+        for event in phase_events:
+            event["duration_days"] = _calculate_commissioning_duration_days(phase, event.get("units"))
+        events.extend(phase_events)
+
+    events.sort(key=lambda item: (item["start"], 0 if item["type"] == "CCx" else 1, int(item.get("sequence", 1)), int(item.get("entry_order", 0))))
     return events
 
-
 def _get_cod_column_name(columns: Any) -> str | None:
-    return _get_schedule_column_name(columns, COD_COLUMN_NAME)
+    cod_cols = _get_cod_columns(columns)
+    return cod_cols[0] if cod_cols else None
 
+
+def _get_cod_events_for_row(row: pd.Series) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    total_units = _get_row_total_equipment_qty(row)
+
+    for cod_col in _get_cod_columns(row.index):
+        raw_value = row.get(cod_col, "")
+        raw_text = str(raw_value).strip()
+        if not raw_text or raw_text.lower() in NA_VALUES or raw_text in DASH_PLACEHOLDERS:
+            continue
+
+        sequence = _cod_column_sequence(cod_col)
+        unit_col = _get_cod_unit_column_for_date(row.index, cod_col)
+        column_units = _parse_equipment_units(row.get(unit_col, "")) if unit_col is not None else None
+
+        for entry_order, entry in enumerate(_split_schedule_entries(raw_value)):
+            cod_date = _parse_schedule_entry_date(entry)
+            if cod_date is None:
+                continue
+
+            inline_units = _parse_inline_units(entry)
+            units = inline_units
+            units_explicit = inline_units is not None
+
+            if units is None:
+                if sequence == 1 and total_units is not None:
+                    units = None
+                    units_explicit = False
+                elif column_units is not None:
+                    units = column_units
+                    units_explicit = True
+
+            events.append(
+                {
+                    "type": "COD",
+                    "start": cod_date,
+                    "end": cod_date,
+                    "color": GANTT_COD_COLOR,
+                    "units": units,
+                    "units_explicit": units_explicit,
+                    "units_source": "inline" if inline_units is not None else ("column" if units_explicit else "qty_pending"),
+                    "source_col": str(cod_col),
+                    "unit_col": str(unit_col) if unit_col is not None else "",
+                    "sequence": sequence,
+                    "entry_order": entry_order,
+                    "marker": "cod",
+                }
+            )
+
+    events = _assign_qty_based_default_units(events, total_units)
+    events.sort(key=lambda item: (item["start"], int(item.get("sequence", 1)), int(item.get("entry_order", 0)), str(item.get("source_col", ""))))
+    return events
 
 def _get_cod_date_for_row(row: pd.Series) -> datetime | None:
-    cod_col = _get_cod_column_name(row.index)
-    return _parse_schedule_date(row.get(cod_col, "")) if cod_col is not None else None
+    """Return the latest COD date. Commercial Operation starts only after the final COD schedule has passed."""
+    cod_events = _get_cod_events_for_row(row)
+    cod_dates = [event["start"] for event in cod_events if isinstance(event.get("start"), datetime)]
+    if not cod_dates:
+        return None
+    return max(cod_dates)
 
 
 def _row_has_legacy_commercial_operation(row: pd.Series) -> bool:
-    cc_col = _get_schedule_column_name(row.index, CCX_START_COLUMN_NAME)
-    hc_col = _get_schedule_column_name(row.index, HCX_START_COLUMN_NAME)
     return any(
-        _is_commercial_operation_value(row.get(col, ""))
-        for col in (cc_col, hc_col)
-        if col is not None
+        _has_legacy_commercial_operation_entry(row.get(col, ""))
+        for col in _get_schedule_start_columns(row.index, "CCx") + _get_schedule_start_columns(row.index, "HCx")
     )
 
 
@@ -2168,34 +2739,40 @@ def _today_start(today: datetime | None = None) -> datetime:
 
 
 def _row_has_cod_commercial_operation(row: pd.Series, today: datetime | None = None) -> bool:
-    cod_date = _get_cod_date_for_row(row)
-    if cod_date is None:
+    latest_cod_date = _get_cod_date_for_row(row)
+    if latest_cod_date is None:
         return False
-    return cod_date <= _today_start(today)
+    return latest_cod_date <= _today_start(today)
 
 
 def _row_has_commercial_operation(row: pd.Series, today: datetime | None = None) -> bool:
-    return _row_has_cod_commercial_operation(row, today) or _row_has_legacy_commercial_operation(row)
+    # When COD schedules exist, COD is the source of truth: Commercial Operation starts after the final COD date.
+    if _get_cod_events_for_row(row):
+        return _row_has_cod_commercial_operation(row, today)
+    return _row_has_legacy_commercial_operation(row)
 
 
 def _build_schedule_segments_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     segments: list[dict[str, Any]] = []
-    for idx, event in enumerate(events):
+    for event in events:
         start = event["start"]
-        planned_end = start + timedelta(days=GANTT_PHASE_BAR_DAYS)
-        next_start = events[idx + 1]["start"] if idx + 1 < len(events) else None
-        end = min(planned_end, next_start) if next_start and next_start > start else planned_end
-        segments.append({"type": event["type"], "start": start, "end": end, "color": event["color"]})
+        duration_days = int(event.get("duration_days") or _calculate_commissioning_duration_days(event.get("type", "CCx"), event.get("units")))
+        end = start + timedelta(days=duration_days)
+        segments.append({**event, "start": start, "end": end, "color": event["color"]})
     return segments
 
 
 def get_current_schedule_phase(row: pd.Series, today: datetime | None = None) -> str | None:
     current_day = _today_start(today)
-    if _row_has_commercial_operation(row, current_day):
-        return GANTT_COMMERCIAL_OPERATION_LABEL
+    active_segments = []
     for segment in _build_schedule_segments_from_events(_get_schedule_events_for_row(row)):
         if segment["start"] <= current_day < segment["end"]:
-            return str(segment["type"])
+            active_segments.append(segment)
+    if active_segments:
+        active_segments.sort(key=lambda item: (0 if item["type"] == "HCx" else 1, item["start"]))
+        return str(active_segments[0]["type"])
+    if _row_has_commercial_operation(row, current_day):
+        return GANTT_COMMERCIAL_OPERATION_LABEL
     return None
 
 
@@ -2206,11 +2783,12 @@ def _default_gantt_window(today: datetime) -> tuple[datetime, datetime]:
 def _all_schedule_window(df: pd.DataFrame, today: datetime) -> tuple[datetime, datetime]:
     all_dates: list[datetime] = []
     for _, row in df.iterrows():
-        for event in _get_schedule_events_for_row(row):
-            all_dates.append(event["start"])
-        cod_date = _get_cod_date_for_row(row)
-        if cod_date is not None:
-            all_dates.append(cod_date)
+        for segment in _build_schedule_segments_from_events(_get_schedule_events_for_row(row)):
+            all_dates.append(segment["start"])
+            all_dates.append(segment["end"])
+        for cod_event in _get_cod_events_for_row(row):
+            if cod_event.get("start") is not None:
+                all_dates.append(cod_event["start"])
     if not all_dates:
         return _default_gantt_window(today)
     window_start = min(all_dates)
@@ -2225,10 +2803,10 @@ def _build_gantt_rows(
     include_all_schedules: bool,
 ) -> tuple[list[dict[str, Any]], datetime, datetime, datetime, bool]:
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    cc_col = _get_schedule_column_name(df.columns, CCX_START_COLUMN_NAME)
-    hc_col = _get_schedule_column_name(df.columns, HCX_START_COLUMN_NAME)
-    cod_col = _get_cod_column_name(df.columns)
-    if cc_col is None and hc_col is None and cod_col is None:
+    cc_cols = _get_schedule_start_columns(df.columns, "CCx")
+    hc_cols = _get_schedule_start_columns(df.columns, "HCx")
+    cod_cols = _get_cod_columns(df.columns)
+    if not cc_cols and not hc_cols and not cod_cols:
         window_start, window_end = _default_gantt_window(today)
         return [], window_start, window_end, today, False
 
@@ -2238,127 +2816,105 @@ def _build_gantt_rows(
     for _, row in df.iterrows():
         location_name = _get_site_display_name(row)
         location_id = str(row.get("location_id", "")).strip()
-        cc_raw = row.get(cc_col, "") if cc_col is not None else ""
-        hc_raw = row.get(hc_col, "") if hc_col is not None else ""
-        cod_raw = row.get(cod_col, "") if cod_col is not None else ""
-        cc_date = _parse_schedule_date(cc_raw) if cc_col is not None else None
-        hc_date = _parse_schedule_date(hc_raw) if hc_col is not None else None
-        cod_date = _parse_schedule_date(cod_raw) if cod_col is not None else None
+        cod_events = _get_cod_events_for_row(row)
+        cod_dates = [event["start"] for event in cod_events if isinstance(event.get("start"), datetime)]
+        latest_cod_date = max(cod_dates) if cod_dates else None
         raw_events = _get_schedule_events_for_row(row)
         is_legacy_commercial = _row_has_legacy_commercial_operation(row)
-        is_cod_commercial = cod_date is not None and cod_date <= today
-        is_commercial = is_cod_commercial or is_legacy_commercial
+        is_cod_commercial = latest_cod_date is not None and latest_cod_date <= today
+        # If COD exists, the latest COD date is the source of truth. Legacy Commercial Operation text is retained as display history only.
+        is_commercial = is_cod_commercial if latest_cod_date is not None else is_legacy_commercial
 
         segments: list[dict[str, Any]] = []
 
+        raw_segments = _build_schedule_segments_from_events(raw_events)
+        for segment in raw_segments:
+            start = segment["start"]
+            end = segment["end"]
 
-
-        if is_legacy_commercial and cod_date is None:
-            if not include_all_schedules:
+            if not include_all_schedules and start + timedelta(days=GANTT_COMPLETED_HIDE_AFTER_DAYS) < today:
+                continue
+            visible_start = max(start, window_start)
+            visible_end = min(end, window_end)
+            if visible_end <= window_start or visible_start >= window_end or visible_end <= visible_start:
                 continue
             segments.append(
                 {
-                    "type": GANTT_COMMERCIAL_OPERATION_LABEL,
-                    "start": window_start,
-                    "end": window_end,
-                    "visible_start": window_start,
-                    "visible_end": window_end,
-                    "color": GANTT_COMMERCIAL_COLOR,
-                    "left": 0.0,
-                    "width": 100.0,
-                    "row_top": "19px",
+                    "type": segment["type"],
+                    "start": start,
+                    "end": end,
+                    "visible_start": visible_start,
+                    "visible_end": visible_end,
+                    "color": segment["color"],
+                    "left": _date_pct(visible_start, window_start, window_end),
+                    "width": max(0.5, _date_pct(visible_end, window_start, window_end) - _date_pct(visible_start, window_start, window_end)),
+                    "row_top": "8px" if segment["type"] == "CCx" else "31px",
+                    "units": segment.get("units"),
+                    "duration_days": segment.get("duration_days"),
                 }
             )
-            sort_date = min([event["start"] for event in raw_events], default=window_end + timedelta(days=1))
-        else:
-            raw_segments = _build_schedule_segments_from_events(raw_events)
-            for segment in raw_segments:
-                start = segment["start"]
-                end = segment["end"]
 
-
-
-                if cod_date is not None:
-                    if start >= cod_date:
-                        continue
-                    end = min(end, cod_date)
-
-                if not include_all_schedules and start + timedelta(days=GANTT_COMPLETED_HIDE_AFTER_DAYS) < today:
-                    continue
-                visible_start = max(start, window_start)
-                visible_end = min(end, window_end)
-                if visible_end <= window_start or visible_start >= window_end or visible_end <= visible_start:
-                    continue
+        for cod_event in cod_events:
+            cod_date = cod_event["start"]
+            if window_start <= cod_date <= window_end:
                 segments.append(
                     {
-                        "type": segment["type"],
-                        "start": start,
-                        "end": end,
-                        "visible_start": visible_start,
-                        "visible_end": visible_end,
-                        "color": segment["color"],
-                        "left": _date_pct(visible_start, window_start, window_end),
-                        "width": max(0.5, _date_pct(visible_end, window_start, window_end) - _date_pct(visible_start, window_start, window_end)),
-                        "row_top": "8px" if segment["type"] == "CCx" else "31px",
+                        "type": "COD",
+                        "start": cod_date,
+                        "end": cod_date,
+                        "visible_start": cod_date,
+                        "visible_end": cod_date,
+                        "color": GANTT_COD_COLOR,
+                        "left": _date_pct(cod_date, window_start, window_end),
+                        "width": 0.0,
+                        "row_top": "20px",
+                        "marker": "cod",
+                        "units": cod_event.get("units"),
+                        "sequence": cod_event.get("sequence"),
+                        "entry_order": cod_event.get("entry_order"),
                     }
                 )
 
-            if cod_date is not None:
+        commercial_start: datetime | None = None
+        if latest_cod_date is not None:
+            commercial_start = latest_cod_date
+        elif is_legacy_commercial:
+            commercial_start = window_start
 
+        if include_all_schedules and commercial_start is not None and commercial_start < window_end:
+            visible_start = max(commercial_start, window_start)
+            visible_end = window_end
+            if visible_end > visible_start:
+                segments.append(
+                    {
+                        "type": GANTT_COMMERCIAL_OPERATION_LABEL,
+                        "start": commercial_start,
+                        "end": window_end,
+                        "visible_start": visible_start,
+                        "visible_end": visible_end,
+                        "color": GANTT_COMMERCIAL_COLOR,
+                        "left": _date_pct(visible_start, window_start, window_end),
+                        "width": max(0.5, _date_pct(visible_end, window_start, window_end) - _date_pct(visible_start, window_start, window_end)),
+                        "row_top": "19px",
+                    }
+                )
 
-
-                if window_start <= cod_date <= window_end:
-                    segments.append(
-                        {
-                            "type": "COD",
-                            "start": cod_date,
-                            "end": cod_date,
-                            "visible_start": cod_date,
-                            "visible_end": cod_date,
-                            "color": GANTT_COD_COLOR,
-                            "left": _date_pct(cod_date, window_start, window_end),
-                            "width": 0.0,
-                            "row_top": "20px",
-                            "marker": "cod",
-                        }
-                    )
-                if include_all_schedules and cod_date < window_end:
-                    visible_start = max(cod_date, window_start)
-                    visible_end = window_end
-                    if visible_end > visible_start:
-                        segments.append(
-                            {
-                                "type": GANTT_COMMERCIAL_OPERATION_LABEL,
-                                "start": cod_date,
-                                "end": window_end,
-                                "visible_start": visible_start,
-                                "visible_end": visible_end,
-                                "color": GANTT_COMMERCIAL_COLOR,
-                                "left": _date_pct(visible_start, window_start, window_end),
-                                "width": max(0.5, _date_pct(visible_end, window_start, window_end) - _date_pct(visible_start, window_start, window_end)),
-                                "row_top": "19px",
-                            }
-                        )
-
-            if not segments:
-                continue
-            sort_candidates = [segment["start"] for segment in segments if segment.get("start") is not None]
-            sort_date = min(sort_candidates) if sort_candidates else window_end + timedelta(days=1)
+        if not segments:
+            continue
+        sort_candidates = [segment["start"] for segment in segments if segment.get("start") is not None]
+        sort_date = min(sort_candidates) if sort_candidates else window_end + timedelta(days=1)
 
         rows.append(
             {
                 "location_name": location_name,
                 "location_id": location_id,
-                "cc_start": cc_date,
-                "hc_start": hc_date,
-                "cod": cod_date,
-                "cc_display": _format_schedule_date(cc_raw),
-                "hc_display": _format_schedule_date(hc_raw),
-                "cod_display": _format_schedule_date(cod_raw),
+                "cc_display": _format_schedule_events_for_phase(row, "CCx"),
+                "hc_display": _format_schedule_events_for_phase(row, "HCx"),
+                "cod_display": _format_cod_events_for_row(row),
                 "segments": segments,
                 "sort_date": sort_date,
                 "is_commercial_operation": is_commercial,
-                "has_cod": cod_date is not None,
+                "has_cod": bool(cod_events),
             }
         )
 
@@ -2371,7 +2927,6 @@ def _build_gantt_rows(
         )
     )
     return rows, window_start, window_end, today, include_all_schedules
-
 
 def _format_gantt_axis_date(dt: datetime) -> str:
     return f"{dt.month}/{dt.day}"
@@ -2444,22 +2999,34 @@ def _build_gantt_html(rows: list[dict[str, Any]], window_start: datetime, window
         for segment in item["segments"]:
             segment_type = str(segment["type"])
             if segment.get("marker") == "cod":
-                tooltip = f"{item['location_name']} · COD · {segment['start'].strftime('%Y-%m-%d')}"
+                cod_units = segment.get("units")
+                qty_text = _format_qty_display(cod_units)
+                tooltip_qty = f" · Qty: {_format_equipment_units(cod_units)} units" if cod_units is not None else ""
+                tooltip = f"{item['location_name']} · COD · {segment['start'].strftime('%Y-%m-%d')}{tooltip_qty}"
+                cod_label = f"COD · {qty_text}" if qty_text else "COD"
                 bars.append(
                     "<div "
                     "class='gantt-cod-marker' "
                     f"title='{html.escape(tooltip)}' "
                     f"style='left:{segment['left']:.3f}%; top:{segment['row_top']};'>"
                     "<span class='gantt-cod-diamond'></span>"
-                    "<span class='gantt-cod-label'>COD</span>"
+                    f"<span class='gantt-cod-label'>{html.escape(cod_label)}</span>"
                     "</div>"
                 )
                 continue
 
             is_commercial_segment = segment_type == GANTT_COMMERCIAL_OPERATION_LABEL
             bar_class = "gantt-bar-commercial" if is_commercial_segment else f"gantt-bar-{segment_type.lower()}"
-            tooltip = f"{item['location_name']} · {segment_type} · {segment['start'].strftime('%Y-%m-%d')} to {segment['end'].strftime('%Y-%m-%d')}"
-            label = GANTT_COMMERCIAL_OPERATION_LABEL if is_commercial_segment else segment_type
+            if is_commercial_segment:
+                tooltip = f"{item['location_name']} · {segment_type} · {segment['start'].strftime('%Y-%m-%d')} to {segment['end'].strftime('%Y-%m-%d')}"
+                label = GANTT_COMMERCIAL_OPERATION_LABEL
+            else:
+                units_label = _format_equipment_units(segment.get("units"))
+                qty_text = _format_qty_display(segment.get("units"))
+                duration_label = int(segment.get("duration_days") or (segment["end"] - segment["start"]).days)
+                units_part = f" · Qty: {units_label} units" if units_label else ""
+                tooltip = f"{item['location_name']} · {segment_type} · {segment['start'].strftime('%Y-%m-%d')} to {segment['end'].strftime('%Y-%m-%d')}{units_part} · Duration: {duration_label} days"
+                label = f"{segment_type} · {qty_text}" if qty_text else segment_type
             bars.append(
                 "<div "
                 f"class='gantt-bar {bar_class}' "
@@ -2500,7 +3067,7 @@ def _build_gantt_html(rows: list[dict[str, Any]], window_start: datetime, window
             </span>
         </div>
         <div class='gantt-layout'>
-            <div class='gantt-chart-scroll' aria-label='Responsive CCx and HCx Gantt chart'>
+            <div class='gantt-chart-scroll' aria-label='Responsive CCx HCx and COD Gantt chart'>
                 <div class='gantt-chart-panel'>
                     <div class='gantt-axis gantt-axis-top'>
                         <div class='gantt-axis-track'>{axis_ticks}<div class='gantt-today-axis' style='left:{today_left:.3f}%;'><span>Today</span></div></div>
@@ -2515,7 +3082,7 @@ def _build_gantt_html(rows: list[dict[str, Any]], window_start: datetime, window
             </div>
             <div class='gantt-table-panel'>
                 <div class='gantt-table'>
-                    <div class='gantt-table-header'><div>Location</div><div>CCx Start</div><div>HCx Start</div><div>COD</div></div>
+                    <div class='gantt-table-header'><div>Location</div><div>CCx Schedule</div><div>HCx Schedule</div><div>COD</div></div>
                     <div class='gantt-table-body'>{''.join(table_rows)}</div>
                 </div>
             </div>
@@ -2526,16 +3093,16 @@ def _build_gantt_html(rows: list[dict[str, Any]], window_start: datetime, window
 
 def render_gantt_chart_section(df: pd.DataFrame) -> None:
     include_all = st.checkbox(
-        "Show All CCx/HCx Schedules",
+        "Show All CCx/HCx/COD Schedules",
         value=False,
         key="gantt_show_all_schedules",
     )
     rows, window_start, window_end, today, include_all_schedules = _build_gantt_rows(df, include_all_schedules=include_all)
     if not rows:
-        cc_col = _get_schedule_column_name(df.columns, CCX_START_COLUMN_NAME)
-        hc_col = _get_schedule_column_name(df.columns, HCX_START_COLUMN_NAME)
-        cod_col = _get_cod_column_name(df.columns)
-        if cc_col is None and hc_col is None and cod_col is None:
+        cc_cols = _get_schedule_start_columns(df.columns, "CCx")
+        hc_cols = _get_schedule_start_columns(df.columns, "HCx")
+        cod_cols = _get_cod_columns(df.columns)
+        if not cc_cols and not hc_cols and not cod_cols:
             st.info("No `CCx Start`, `HCx Start`, or `COD` columns were found in the active CSV.")
         else:
             st.info("No CCx/HCx/COD schedule rows fall within the current Gantt display window.")
@@ -3819,7 +4386,7 @@ def render_people_kpi_cards(people_kpis: dict[str, Any]) -> None:
         )
     html_content = "".join(
         [
-            _people_kpi_card_html("On-Site Team", team_value.get("count", 0) if isinstance(team_value, dict) else 0, team_lines),
+            _people_kpi_card_html("On-Site Team Overview", team_value.get("count", 0) if isinstance(team_value, dict) else 0, team_lines),
             _people_kpi_card_html("On-Site Staff", staff_value.get("count", 0) if isinstance(staff_value, dict) else 0, staff_lines, span_two=True, lines_are_html=True),
         ]
     )
@@ -3909,7 +4476,10 @@ def render_selected_site_detail(selected_site: pd.Series | None, task_columns: l
 
     st.markdown("#### Selected Work Items")
     for task in selected_task_columns:
-        _render_task_detail_row(task, parse_task_status_value(task, site.get(task, "")))
+        parsed = parse_task_status_value(task, site.get(task, ""))
+        if is_schedule_column(task):
+            parsed = {**parsed, "display_text": _format_schedule_task_display(site, task, site.get(task, ""))}
+        _render_task_detail_row(task, parsed)
 
 
 def _to_csv_bytes(df: pd.DataFrame) -> bytes:
@@ -3928,7 +4498,10 @@ def render_data_table(filtered_df: pd.DataFrame, selected_task_columns: list[str
         lambda row: calculate_site_summary_for_selected_tasks(row, selected_task_columns)["min_percent"], axis=1
     )
     for task in selected_task_columns:
-        table[f"{task}__display"] = table[task].apply(lambda value, task=task: parse_task_status_value(task, value)["display_text"])
+        if is_schedule_column(task):
+            table[f"{task}__display"] = table.apply(lambda row, task=task: _format_schedule_task_display(row, task, row.get(task, "")), axis=1)
+        else:
+            table[f"{task}__display"] = table[task].apply(lambda value, task=task: parse_task_status_value(task, value)["display_text"])
         if len(selected_task_columns) == 1:
             table[f"{task}__percent"] = table[task].apply(lambda value, task=task: parse_task_status_value(task, value)["percent"])
 
